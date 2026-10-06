@@ -1,0 +1,723 @@
+---
+title: HERMES Trinity - Multi-Agent Architecture & Production Patterns
+description: Build production-ready multi-agent systems using Hermes 2 Pro with persistent memory, orchestration, and autonomous workflows inspired by KAI's design philosophy.
+pcx_content_type: implementation-guide
+difficulty: Advanced
+sidebar:
+  order: 6
+products:
+  - workers-ai
+reviewed: 2026-09-24
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+HERMES Trinity is a multi-agent orchestration framework built on Hermes 2 Pro that combines advanced memory systems, autonomous workflows, and a conductor-based agent architecture. Inspired by Andrea Eskailet's KAI system ("music not noise"), HERMES Trinity enables truly autonomous agents that learn, persist, and scale.
+
+## Architecture Overview
+
+### The Trinity: Three Layers
+
+HERMES Trinity operates on three integrated layers:
+
+1. **Conductor Layer** - Central orchestration that routes requests to specialized agents
+2. **Worker Layer** - Specialized agents that execute domain-specific tasks
+3. **Memory Layer** - Persistent knowledge across episodic, semantic, and procedural dimensions
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Conductor Agent                       │
+│         (Request routing, orchestration, learning)      │
+└──────┬──────────┬──────────┬──────────┬─────────────────┘
+       │          │          │          │
+   ┌───▼──┐   ┌───▼──┐   ┌───▼──┐   ┌──▼────┐
+   │Writer│   │Analyst│  │ Exec │   │Comms  │
+   │Agent │   │Agent  │  │Agent │   │Agent  │
+   └───┬──┘   └───┬──┘   └───┬──┘   └──┬────┘
+       │          │          │          │
+┌──────▼──────────▼──────────▼──────────▼──────────────────┐
+│              Memory Persistence Layer                    │
+│                                                          │
+│  Episodic | Semantic | Procedural | Task State          │
+│  (Events) | (Knowledge) | (Patterns) | (Workflows)      │
+└──────────────────────────────────────────────────────────┘
+```
+
+## Philosophy: "Music Not Noise"
+
+Like KAI's design, HERMES Trinity treats agents as instruments in an orchestra:
+
+- **Each agent has one role** - A writer agent writes; an analyst analyzes
+- **The conductor directs** - Decides which agent plays next based on the symphony
+- **Quality gates between steps** - Each agent validates output before passing to next
+- **Prompts are partituras** - Carefully crafted instructions that set the exact "tempo"
+- **Autonomous but guided** - Agents make decisions within defined parameters
+
+## Layer 1: Conductor Agent
+
+The conductor agent is the central nervous system that:
+- Routes incoming requests to appropriate worker agents
+- Maintains awareness of agent states and capabilities
+- Makes autonomous decisions about workflow sequencing
+- Learns from successful patterns to improve routing
+
+### Conductor Implementation
+
+```typescript
+interface ConductorContext {
+  requestId: string;
+  userIntent: string;
+  conversationHistory: Message[];
+  agentCapabilities: Record<string, AgentCapability>;
+  memoryContext: MemoryState;
+  qualityThreshold: number;
+}
+
+interface AgentCapability {
+  name: string;
+  description: string;
+  inputTypes: string[];
+  outputTypes: string[];
+  autonomyLevel: "low" | "medium" | "high";
+}
+
+async function conductorAgent(
+  context: ConductorContext,
+  env: Env
+): Promise<OrchestrationPlan> {
+  const systemPrompt = `You are HERMES Trinity Conductor.
+
+Your role:
+- Analyze the user request and conversation context
+- Decide which agents need to be engaged and in what order
+- Create a quality-gated workflow plan
+- Make autonomous routing decisions based on learned patterns
+
+Available agents:
+${JSON.stringify(context.agentCapabilities, null, 2)}
+
+Rules:
+- Prefer specialist agents when possible (accuracy over speed)
+- Include quality gates (validation steps) between agents
+- If confidence is low, escalate to human review
+- Learn from conversation history to improve future routing`;
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        ...context.conversationHistory,
+        {
+          role: "user",
+          content: `Route this request: "${context.userIntent}"`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            routing_decision: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  agent: { type: "string" },
+                  task: { type: "string" },
+                  input_data: { type: "object" },
+                  quality_gate: { type: "string" },
+                  confidence: { type: "number", minimum: 0, maximum: 1 },
+                },
+                required: ["agent", "task", "confidence"],
+              },
+            },
+            reasoning: { type: "string" },
+            learned_pattern: { type: "string" },
+          },
+          required: ["routing_decision", "reasoning"],
+        },
+      },
+      temperature: 0.3,
+      max_tokens: 1024,
+    }
+  );
+
+  return JSON.parse(response.response);
+}
+```
+
+## Layer 2: Specialized Worker Agents
+
+Each worker agent handles a specific domain and maintains:
+- Role-specific knowledge and tools
+- Quality validation before output
+- Ability to escalate to conductor if uncertain
+- Learning from feedback
+
+### Example: Writer Agent
+
+```typescript
+async function writerAgent(
+  content: string,
+  style: { tone: string; audience: string },
+  env: Env
+): Promise<WriterOutput> {
+  const systemPrompt = `You are a specialist writer agent.
+
+Your capabilities:
+- Content creation and refinement
+- Style and tone adaptation
+- Structure optimization
+- Clarity improvement
+- SEO considerations
+
+Quality gates:
+- Content must be factually accurate
+- Tone must match specified audience
+- Structure must follow outline
+- Length must be within limits
+
+Rules:
+- Focus on one task at a time
+- Validate all facts before including
+- Ask conductor for clarification if uncertain
+- Learn from feedback to improve`;
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        {
+          role: "user",
+          content: `Create content with tone="${style.tone}" for audience="${style.audience}": ${content}`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            content: { type: "string" },
+            quality_score: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+              description: "Self-assessed quality (0-1)",
+            },
+            metadata: {
+              type: "object",
+              properties: {
+                word_count: { type: "number" },
+                reading_level: { type: "string" },
+                tone_match: { type: "number" },
+                confidence: { type: "number" },
+              },
+            },
+            validation_notes: { type: "string" },
+          },
+          required: ["content", "quality_score", "validation_notes"],
+        },
+      },
+      temperature: 0.5,
+      max_tokens: 2048,
+    }
+  );
+
+  return JSON.parse(response.response);
+}
+```
+
+### Example: Analyst Agent
+
+```typescript
+async function analystAgent(
+  data: unknown,
+  analysisType: string,
+  env: Env
+): Promise<AnalysisOutput> {
+  const systemPrompt = `You are a data analyst agent.
+
+Your role:
+- Extract insights from data
+- Identify patterns and anomalies
+- Assess data quality
+- Provide structured recommendations
+
+Quality gates:
+- All statistics must be verifiable
+- Confidence levels must be realistic
+- Recommendations must be actionable
+- Edge cases must be documented`;
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        {
+          role: "user",
+          content: `Analyze (${analysisType}): ${JSON.stringify(data)}`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            key_insights: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  insight: { type: "string" },
+                  confidence: { type: "number" },
+                  supporting_data: { type: "string" },
+                },
+              },
+            },
+            patterns: {
+              type: "array",
+              items: { type: "string" },
+            },
+            recommendations: {
+              type: "array",
+              items: { type: "string" },
+            },
+            quality_assessment: {
+              type: "object",
+              properties: {
+                data_completeness: { type: "number" },
+                analysis_confidence: { type: "number" },
+                caveats: { type: "string" },
+              },
+            },
+          },
+          required: ["key_insights", "recommendations", "quality_assessment"],
+        },
+      },
+      temperature: 0.2,
+      max_tokens: 1024,
+    }
+  );
+
+  return JSON.parse(response.response);
+}
+```
+
+## Layer 3: Memory System
+
+HERMES Trinity's memory consists of four components:
+
+### 1. Episodic Memory (Events & Context)
+
+Stores what happened and when:
+
+```typescript
+interface EpisodicMemory {
+  timestamp: Date;
+  requestId: string;
+  userIntent: string;
+  agentsInvolved: string[];
+  decisions: Record<string, unknown>;
+  outcomes: "success" | "partial" | "escalated";
+  feedback?: string;
+}
+```
+
+### 2. Semantic Memory (Knowledge)
+
+Stores facts, rules, and learned patterns:
+
+```typescript
+interface SemanticMemory {
+  topic: string;
+  knowledge: string;
+  source: "training" | "learned" | "verified";
+  confidence: number;
+  lastUpdated: Date;
+  relatedTopics: string[];
+}
+```
+
+### 3. Procedural Memory (How-To)
+
+Stores successful workflows and patterns:
+
+```typescript
+interface ProceduralMemory {
+  workflowName: string;
+  steps: WorkflowStep[];
+  successRate: number;
+  contexts: string[]; // When this workflow applies
+  variations: ProceduralMemory[]; // Adapted versions
+  cost: number; // Inference cost
+}
+
+interface WorkflowStep {
+  agent: string;
+  task: string;
+  expectedOutput: string;
+  qualityGate: string;
+}
+```
+
+### 4. Task State (Durable Workflows)
+
+Persists in-progress work across sessions:
+
+```typescript
+interface TaskState {
+  taskId: string;
+  status: "active" | "paused" | "completed";
+  createdAt: Date;
+  lastHeartbeat: Date;
+  progress: Record<string, unknown>;
+  nextStep: string;
+  estimatedCompletion: Date;
+}
+```
+
+### Memory Integration Example
+
+```typescript
+async function augmentContextWithMemory(
+  context: ConductorContext,
+  memory: MemoryStore,
+  env: Env
+): Promise<ConductorContext> {
+  // Fetch relevant episodic memories (recent similar requests)
+  const recentEpisodes = await memory.queryEpisodic({
+    userIntentSimilarity: context.userIntent,
+    limit: 5,
+  });
+
+  // Fetch relevant semantic knowledge
+  const relevantKnowledge = await memory.querySemantic({
+    topics: extractTopicsFromIntent(context.userIntent),
+    minConfidence: 0.8,
+  });
+
+  // Fetch successful procedural patterns
+  const successfulWorkflows = await memory.queryProcedural({
+    contextMatch: context.userIntent,
+    minSuccessRate: 0.85,
+  });
+
+  return {
+    ...context,
+    memoryContext: {
+      episodic: recentEpisodes,
+      semantic: relevantKnowledge,
+      procedural: successfulWorkflows,
+      taskState: await memory.getActiveTaskState(),
+    },
+  };
+}
+```
+
+## Integration Patterns
+
+### Pattern 1: Content Generation Pipeline
+
+Full workflow from concept to publication:
+
+```typescript
+async function contentPipeline(
+  topic: string,
+  audience: string,
+  env: Env,
+  memory: MemoryStore
+): Promise<ContentOutput> {
+  // 1. Conductor routes: "We need content on {topic}"
+  const plan = await conductorAgent(
+    {
+      userIntent: `Create content about ${topic}`,
+      agentCapabilities: { writer: {}, analyst: {}, exec: {} },
+    },
+    env
+  );
+
+  // 2. Analyst agent: Research the topic
+  const research = await analystAgent(
+    { topic, currentKnowledge: memory.get(topic) },
+    "research",
+    env
+  );
+
+  // 3. Writer agent: Draft the content
+  const draft = await writerAgent(
+    JSON.stringify(research),
+    { tone: "professional", audience },
+    env
+  );
+
+  // 4. Analyst agent: Review quality
+  const review = await analystAgent(
+    { content: draft.content, expectedAudience: audience },
+    "quality_review",
+    env
+  );
+
+  // 5. Store in episodic memory for learning
+  await memory.storeEpisodic({
+    timestamp: new Date(),
+    userIntent: `Create content about ${topic}`,
+    agentsInvolved: ["analyst", "writer"],
+    outcomes: review.quality_assessment.analysis_confidence > 0.8 ? "success" : "partial",
+  });
+
+  return {
+    content: draft.content,
+    qualityScore: review.quality_assessment.analysis_confidence,
+    metadata: draft.metadata,
+  };
+}
+```
+
+### Pattern 2: Autonomous Workflow Execution
+
+Long-running tasks that persist across sessions:
+
+```typescript
+async function autonomousWorkflow(
+  workflowId: string,
+  taskStore: DurableStorage,
+  env: Env
+): Promise<void> {
+  // Load task state
+  let task = await taskStore.get<TaskState>(`task:${workflowId}`);
+
+  while (task.status === "active") {
+    // Get next step
+    const nextStep = task.progress[task.nextStep];
+
+    // Execute with conductor guidance
+    const result = await conductorAgent(
+      {
+        userIntent: nextStep.description,
+        requestId: workflowId,
+      },
+      env
+    );
+
+    // Execute routing plan
+    for (const step of result.routing_decision) {
+      const agent = getAgent(step.agent);
+      const output = await agent.execute(step.input_data, env);
+
+      // Validate quality gate
+      if (output.quality_score < task.qualityThreshold) {
+        task.status = "paused";
+        task.progress.escalation = {
+          reason: "Quality gate failed",
+          details: output.validation_notes,
+        };
+        break;
+      }
+
+      // Store result and advance
+      task.progress[step.agent] = output;
+      task.lastHeartbeat = new Date();
+    }
+
+    // Checkpoint
+    await taskStore.put(`task:${workflowId}`, task);
+
+    // Advance to next step
+    task.nextStep = getNextStep(task.nextStep, result.routing_decision);
+
+    if (!task.nextStep) {
+      task.status = "completed";
+    }
+  }
+
+  await taskStore.put(`task:${workflowId}`, task);
+}
+```
+
+### Pattern 3: Communication Integration
+
+Multi-channel agent interaction (Telegram, Email, etc.):
+
+```typescript
+async function communicationBridge(
+  channel: "telegram" | "email" | "slack",
+  message: string,
+  userId: string,
+  env: Env,
+  memory: MemoryStore
+): Promise<void> {
+  // Get user's communication preference and history
+  const userContext = await memory.getUserContext(userId);
+
+  // Run conductor with communication constraints
+  const response = await conductorAgent(
+    {
+      userIntent: message,
+      conversationHistory: userContext.recentMessages,
+      agentCapabilities: filterAgentsByChannel(channel),
+    },
+    env
+  );
+
+  // Execute workflow
+  const result = await executeOrchestrationPlan(response, env);
+
+  // Format for channel
+  const formattedResponse = formatForChannel(channel, result);
+
+  // Send through appropriate channel
+  switch (channel) {
+    case "telegram":
+      await env.TELEGRAM.sendMessage(userId, formattedResponse);
+      break;
+    case "email":
+      await env.EMAIL.send(userContext.email, formattedResponse);
+      break;
+    case "slack":
+      await env.SLACK.postMessage(userContext.slackChannel, formattedResponse);
+      break;
+  }
+
+  // Store in memory
+  await memory.storeEpisodic({
+    timestamp: new Date(),
+    userIntent: message,
+    channel,
+    outcomes: "success",
+  });
+}
+```
+
+## Learning & Improvement
+
+HERMES Trinity learns through:
+
+1. **Feedback Loops** - Store user feedback with episodic memory
+2. **Success Tracking** - Monitor workflow success rates
+3. **Pattern Recognition** - Identify recurring problem-solution pairs
+4. **Cost Optimization** - Learn which workflows are most efficient
+5. **Quality Improvement** - Adjust confidence thresholds based on outcomes
+
+```typescript
+async function learningCycle(
+  memory: MemoryStore,
+  env: Env
+): Promise<void> {
+  // 1. Analyze recent episodes
+  const recentEpisodes = await memory.queryEpisodic({
+    limit: 100,
+    sinceHours: 24,
+  });
+
+  // 2. Calculate success rates by workflow
+  const workflows = new Map<string, { total: number; successful: number }>();
+
+  for (const episode of recentEpisodes) {
+    const workflowKey = episode.agentsInvolved.join("-");
+    const stats = workflows.get(workflowKey) || { total: 0, successful: 0 };
+    stats.total++;
+    if (episode.outcomes === "success") stats.successful++;
+    workflows.set(workflowKey, stats);
+  }
+
+  // 3. Update procedural memory with success rates
+  for (const [workflow, stats] of workflows) {
+    const successRate = stats.successful / stats.total;
+    await memory.updateProcedural(workflow, {
+      successRate,
+      costPerExecution: calculateAverageCost(workflow, recentEpisodes),
+    });
+  }
+
+  // 4. Identify new patterns
+  const newPatterns = await conductorAgent(
+    {
+      userIntent: "Analyze these episodes and identify new successful patterns",
+      conversationHistory: [
+        {
+          role: "user",
+          content: JSON.stringify(recentEpisodes.slice(0, 10)),
+        },
+      ],
+    },
+    env
+  );
+
+  // 5. Store learned patterns
+  for (const pattern of newPatterns.learned_pattern) {
+    await memory.storeSemanticPattern(pattern);
+  }
+}
+```
+
+## Production Deployment
+
+### Prerequisites
+
+- Hermes 2 Pro access via Workers AI
+- Durable Storage (Workers KV or D1)
+- Communication channels (Telegram, Email, etc.)
+- Monitoring and logging infrastructure
+
+### Configuration
+
+```typescript
+interface HermesConfig {
+  // Agent tuning
+  conductorTemperature: 0.3;
+  workerTemperature: 0.5;
+  qualityThreshold: 0.85;
+
+  // Memory retention
+  episodicRetention: 30; // days
+  semanticConfidenceMin: 0.8;
+  proceduralSuccessThreshold: 0.75;
+
+  // Autonomy levels
+  conductorAutonomy: "high";
+  workerAutonomy: "medium";
+  escalationThreshold: 0.7;
+
+  // Cost controls
+  maxTokensPerRequest: 2048;
+  maxCostPerWorkflow: 0.50; // USD
+  optimizeForSpeed: false; // true = smaller models, false = accuracy
+
+  // Monitoring
+  enableDetailedLogging: true;
+  alertOnFailure: true;
+}
+```
+
+### Deployment Checklist
+
+- [ ] Memory storage configured and tested
+- [ ] Agent capabilities verified with sample requests
+- [ ] Quality gates calibrated for your use cases
+- [ ] Communication channels integrated and tested
+- [ ] Monitoring and alerting configured
+- [ ] Cost tracking enabled
+- [ ] Learning cycle scheduled (daily recommended)
+- [ ] Human escalation process documented
+- [ ] Feedback collection enabled
+- [ ] Performance baseline established
+
+## Related Documentation
+
+- [Hermes 2 Pro Model Selection & Implementation Guide](/workers-ai/models/hermes-2-pro-guide/)
+- [Function Calling Guide](/workers-ai/features/function-calling/)
+- [JSON Mode Reference](/workers-ai/features/json-mode/)
+- [Workers AI Get Started](/workers-ai/get-started/)
+- [Durable Objects for State Management](/durable-objects/get-started/)

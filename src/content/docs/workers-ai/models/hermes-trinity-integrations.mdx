@@ -1,0 +1,658 @@
+---
+title: HERMES Trinity - Real-World Integrations
+description: Connect HERMES Trinity to Telegram, n8n, databases, and external APIs for production workflows
+pcx_content_type: integration-guide
+difficulty: Advanced
+sidebar:
+  order: 8
+products:
+  - workers-ai
+reviewed: 2026-09-24
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Connect HERMES Trinity to real-world platforms and services for production-grade autonomous systems.
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│         Communication Channels                      │
+│  (Telegram, Discord, Slack, Email, Web)           │
+└────────────┬────────────────────────────────────────┘
+             │
+┌────────────▼────────────────────────────────────────┐
+│         HERMES Trinity Worker                       │
+│  (Conductor + Agents + Memory)                      │
+└────────────┬────────────────────────────────────────┘
+             │
+     ┌───────┼───────┐
+     │       │       │
+┌────▼──┐ ┌──▼───┐ ┌▼────────┐
+│  n8n  │ │ D1   │ │External │
+│Workflows│ │DB   │ │  APIs   │
+└────────┘ └──────┘ └─────────┘
+```
+
+## 1. Telegram Integration
+
+Connect HERMES Trinity to Telegram for interactive bots:
+
+### Setup Telegram Bot
+
+```bash
+# 1. Get your bot token from @BotFather on Telegram
+export TELEGRAM_BOT_TOKEN="your_token_here"
+
+# 2. Set environment variable in wrangler.toml
+```
+
+### Implementation
+
+Create `src/integrations/telegram.ts`:
+
+```typescript
+interface TelegramUpdate {
+  update_id: number;
+  message?: {
+    message_id: number;
+    from: {
+      id: number;
+      first_name: string;
+    };
+    text: string;
+  };
+}
+
+interface TelegramConfig {
+  botToken: string;
+  webhookUrl: string;
+}
+
+export async function handleTelegramMessage(
+  update: TelegramUpdate,
+  env: Env
+): Promise<void> {
+  if (!update.message?.text) return;
+
+  const chatId = update.message.from.id;
+  const userMessage = update.message.text;
+
+  try {
+    // 1. Get user context from KV storage
+    const userKey = `telegram:${chatId}`;
+    const userContext = (await env.KV.get(userKey, "json")) || {
+      conversations: [],
+      userId: chatId,
+    };
+
+    // 2. Send to HERMES for processing
+    const hermesResponse = await fetch(
+      new URL("/api/hermes", env.WORKERS_URL).toString(),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: userMessage,
+          context: userContext,
+          source: "telegram",
+        }),
+      }
+    );
+
+    const result = (await hermesResponse.json()) as {
+      status: string;
+      result: string;
+    };
+
+    if (result.status === "success") {
+      // 3. Send response back to Telegram
+      await sendTelegramMessage(chatId, result.result, env);
+
+      // 4. Store conversation in memory
+      userContext.conversations.push({
+        role: "user",
+        content: userMessage,
+        timestamp: new Date().toISOString(),
+      });
+      userContext.conversations.push({
+        role: "assistant",
+        content: result.result,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Keep only last 20 messages
+      if (userContext.conversations.length > 20) {
+        userContext.conversations = userContext.conversations.slice(-20);
+      }
+
+      await env.KV.put(userKey, JSON.stringify(userContext), {
+        expirationTtl: 86400 * 30,
+      });
+    }
+  } catch (error) {
+    console.error("Telegram handler error:", error);
+    await sendTelegramMessage(
+      chatId,
+      "Sorry, an error occurred. Please try again.",
+      env
+    );
+  }
+}
+
+async function sendTelegramMessage(
+  chatId: number,
+  text: string,
+  env: Env
+): Promise<void> {
+  const apiUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+
+  // Split long messages (Telegram max 4096 chars)
+  const chunks = text.match(/[\s\S]{1,4000}/g) || [text];
+
+  for (const chunk of chunks) {
+    await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: chunk,
+        parse_mode: "Markdown",
+      }),
+    });
+  }
+}
+
+export async function registerTelegramWebhook(
+  env: Env
+): Promise<{ ok: boolean }> {
+  const apiUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`;
+
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: env.TELEGRAM_WEBHOOK_URL,
+      allowed_updates: ["message"],
+    }),
+  });
+
+  return response.json();
+}
+```
+
+### Webhook Handler in `src/index.ts`
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Handle Telegram webhook
+    if (url.pathname === "/telegram" && request.method === "POST") {
+      const update = (await request.json()) as TelegramUpdate;
+      await handleTelegramMessage(update, env);
+      return new Response("OK");
+    }
+
+    return new Response("Not Found", { status: 404 });
+  },
+} satisfies ExportedHandler<Env>;
+```
+
+## 2. n8n Workflow Integration
+
+Trigger HERMES Trinity from n8n workflows:
+
+### Setup
+
+1. **Install HTTP Node** in n8n
+2. **Configure POST request** to your HERMES worker
+3. **Parse JSON response**
+
+### n8n Workflow Configuration
+
+```json
+{
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://your-hermes-worker.dev/api/workflow",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.HERMES_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "{{ $node.TriggerNode.json.text }}"
+            },
+            {
+              "name": "context",
+              "value": "{{ $node.TriggerNode.json.metadata }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [300, 200],
+      "name": "Call HERMES Trinity"
+    }
+  ]
+}
+```
+
+### HERMES Handler for n8n
+
+```typescript
+export async function handleN8nWorkflow(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  // Verify token
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader !== `Bearer ${env.HERMES_TOKEN}`) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  const { query, context } = (await request.json()) as {
+    query: string;
+    context: Record<string, unknown>;
+  };
+
+  try {
+    // Run HERMES
+    const response = await runConductor(query, env);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        hermesRouting: response,
+        context,
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  } catch (error) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+}
+```
+
+## 3. Database Integration
+
+Store and retrieve data from Cloudflare D1 (SQLite):
+
+```typescript
+interface ConversationRecord {
+  id: number;
+  userId: string;
+  userMessage: string;
+  hermesResponse: string;
+  agentsUsed: string;
+  confidence: number;
+  createdAt: string;
+}
+
+export async function storeConversation(
+  userId: string,
+  userMessage: string,
+  hermesResponse: string,
+  agentsUsed: string[],
+  confidence: number,
+  env: Env
+): Promise<void> {
+  const db = env.DB;
+
+  await db.prepare(`
+    INSERT INTO conversations 
+    (userId, userMessage, hermesResponse, agentsUsed, confidence, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(
+    userId,
+    userMessage,
+    hermesResponse,
+    JSON.stringify(agentsUsed),
+    confidence,
+    new Date().toISOString()
+  ).run();
+}
+
+export async function getUserConversationHistory(
+  userId: string,
+  limit: number = 10,
+  env: Env
+): Promise<ConversationRecord[]> {
+  const db = env.DB;
+
+  const result = await db.prepare(`
+    SELECT * FROM conversations 
+    WHERE userId = ? 
+    ORDER BY createdAt DESC 
+    LIMIT ?
+  `).bind(userId, limit).all();
+
+  return result.results as ConversationRecord[];
+}
+
+export async function getAnalytics(env: Env): Promise<{
+  totalConversations: number;
+  averageConfidence: number;
+  mostUsedAgents: string[];
+}> {
+  const db = env.DB;
+
+  const result = await db.prepare(`
+    SELECT 
+      COUNT(*) as totalConversations,
+      AVG(confidence) as averageConfidence,
+      agentsUsed
+    FROM conversations
+    GROUP BY agentsUsed
+    ORDER BY COUNT(*) DESC
+  `).all();
+
+  const records = result.results as Array<{
+    totalConversations: number;
+    averageConfidence: number;
+    agentsUsed: string;
+  }>;
+
+  const mostUsedAgents = records
+    .slice(0, 3)
+    .flatMap((r) => JSON.parse(r.agentsUsed));
+
+  return {
+    totalConversations: records[0]?.totalConversations || 0,
+    averageConfidence: records[0]?.averageConfidence || 0,
+    mostUsedAgents,
+  };
+}
+```
+
+### D1 Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  userId TEXT NOT NULL,
+  userMessage TEXT NOT NULL,
+  hermesResponse TEXT NOT NULL,
+  agentsUsed TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_userId ON conversations(userId);
+CREATE INDEX idx_createdAt ON conversations(createdAt);
+```
+
+## 4. External API Integration
+
+Use function calling to invoke external APIs:
+
+```typescript
+interface APITool {
+  name: string;
+  description: string;
+  function: (args: Record<string, unknown>, env: Env) => Promise<unknown>;
+}
+
+export const externalTools: APITool[] = [
+  {
+    name: "search_web",
+    description: "Search the web for information",
+    function: async (args: { query: string }, env: Env) => {
+      const response = await fetch(
+        `https://api.search.com/search?q=${encodeURIComponent(args.query)}`,
+        {
+          headers: { "Authorization": `Bearer ${env.SEARCH_API_KEY}` },
+        }
+      );
+      return response.json();
+    },
+  },
+  {
+    name: "fetch_weather",
+    description: "Get weather information for a location",
+    function: async (args: { location: string }, env: Env) => {
+      const response = await fetch(
+        `https://api.weather.com/forecast?location=${encodeURIComponent(args.location)}`,
+        {
+          headers: { "Authorization": `Bearer ${env.WEATHER_API_KEY}` },
+        }
+      );
+      return response.json();
+    },
+  },
+  {
+    name: "post_to_slack",
+    description: "Send a message to Slack",
+    function: async (args: { channel: string; message: string }, env: Env) => {
+      const response = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: args.channel,
+          text: args.message,
+        }),
+      });
+      return response.json();
+    },
+  },
+];
+
+export async function executeWithTools(
+  userQuery: string,
+  availableTools: APITool[],
+  env: Env
+): Promise<string> {
+  const tools = availableTools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: {
+      type: "object",
+      properties: {}, // Simplified - add proper schema
+    },
+  }));
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "user",
+          content: userQuery,
+        },
+      ],
+      tools,
+    }
+  );
+
+  // Handle tool calls
+  if (response.tool_calls && response.tool_calls.length > 0) {
+    let result = "";
+
+    for (const call of response.tool_calls) {
+      const tool = availableTools.find((t) => t.name === call.name);
+      if (tool) {
+        const toolResult = await tool.function(call.arguments, env);
+        result += JSON.stringify(toolResult);
+      }
+    }
+
+    return result;
+  }
+
+  return response.response;
+}
+```
+
+## 5. Discord Integration
+
+Connect HERMES Trinity to Discord servers:
+
+```typescript
+interface DiscordMessage {
+  content: string;
+  author: {
+    id: string;
+    username: string;
+  };
+  channel_id: string;
+}
+
+export async function handleDiscordMessage(
+  message: DiscordMessage,
+  env: Env
+): Promise<void> {
+  if (message.content.startsWith("/hermes ")) {
+    const query = message.content.replace("/hermes ", "");
+
+    try {
+      // Call HERMES
+      const response = await env.AI.run(
+        "@hf/nousresearch/hermes-2-pro-mistral-7b",
+        {
+          messages: [{ role: "user", content: query }],
+        }
+      );
+
+      // Send response to Discord
+      await sendDiscordMessage(
+        message.channel_id,
+        response.response,
+        env.DISCORD_BOT_TOKEN
+      );
+    } catch (error) {
+      await sendDiscordMessage(
+        message.channel_id,
+        "Error processing request",
+        env.DISCORD_BOT_TOKEN
+      );
+    }
+  }
+}
+
+async function sendDiscordMessage(
+  channelId: string,
+  content: string,
+  botToken: string
+): Promise<void> {
+  const url = `https://discord.com/api/v10/channels/${channelId}/messages`;
+
+  await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bot ${botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ content }),
+  });
+}
+```
+
+## Production Deployment
+
+### Environment Variables
+
+```toml
+# wrangler.toml
+[env.production]
+vars = { ENVIRONMENT = "production" }
+kv_namespaces = [
+  { binding = "KV", id = "your-kv-id" }
+]
+d1_databases = [
+  { binding = "DB", database_id = "your-db-id" }
+]
+
+[env.production.secrets]
+TELEGRAM_BOT_TOKEN = "your-token"
+HERMES_TOKEN = "your-api-token"
+SEARCH_API_KEY = "your-key"
+WEATHER_API_KEY = "your-key"
+SLACK_BOT_TOKEN = "your-token"
+DISCORD_BOT_TOKEN = "your-token"
+```
+
+### Deploy to Production
+
+```bash
+wrangler deploy --env production
+```
+
+## Monitoring & Logging
+
+```typescript
+interface LogEntry {
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  source: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function logEvent(
+  level: "info" | "warn" | "error",
+  source: string,
+  message: string,
+  metadata: Record<string, unknown> = {},
+  env: Env
+): Promise<void> {
+  const logEntry: LogEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    source,
+    message,
+    metadata,
+  };
+
+  // Log to stdout (visible in tail)
+  console.log(JSON.stringify(logEntry));
+
+  // Optional: Store in D1 for analytics
+  if (env.DB) {
+    await env.DB.prepare(`
+      INSERT INTO logs (timestamp, level, source, message, metadata)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      logEntry.timestamp,
+      logEntry.level,
+      logEntry.source,
+      logEntry.message,
+      JSON.stringify(logEntry.metadata)
+    ).run();
+  }
+}
+```
+
+## Resources
+
+- [HERMES Trinity Architecture](/workers-ai/models/hermes-trinity-architecture/)
+- [HERMES Trinity Quick Start](/workers-ai/models/hermes-trinity-quickstart/)
+- [Workers KV Documentation](/workers/runtime-apis/kv/)
+- [Workers D1 Documentation](/d1/)

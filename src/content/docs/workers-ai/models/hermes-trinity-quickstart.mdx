@@ -1,0 +1,492 @@
+---
+title: HERMES Trinity Quick Start
+description: Deploy your first HERMES Trinity multi-agent system in 15 minutes
+pcx_content_type: get-started
+difficulty: Intermediate
+sidebar:
+  order: 7
+products:
+  - workers-ai
+reviewed: 2026-09-24
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Get a working HERMES Trinity system running in 15 minutes with this hands-on guide.
+
+## Prerequisites
+
+- Workers project with Hermes 2 Pro access via Workers AI
+- Basic TypeScript knowledge
+- `wrangler` CLI installed
+
+## Step 1: Create a Workers Project
+
+```bash
+npm create cloudflare -- hermes-trinity-demo
+cd hermes-trinity-demo
+npm run deploy
+```
+
+## Step 2: Set Up the Conductor Agent
+
+The conductor is the central orchestrator. Create `src/conductor.ts`:
+
+```typescript
+import { Ai } from "@cloudflare/workers-types";
+
+export interface RoutingDecision {
+  agent: string;
+  task: string;
+  confidence: number;
+}
+
+export async function runConductor(
+  userRequest: string,
+  env: Env
+): Promise<RoutingDecision[]> {
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `You are HERMES Trinity Conductor.
+          
+Analyze requests and decide which agents to use:
+- writer: Creates and refines content
+- analyst: Analyzes data and generates insights
+- executor: Performs tasks and operations
+
+Respond with a JSON array of routing decisions.`,
+        },
+        {
+          role: "user",
+          content: userRequest,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            decisions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  agent: { type: "string" },
+                  task: { type: "string" },
+                  confidence: { type: "number" },
+                },
+                required: ["agent", "task", "confidence"],
+              },
+            },
+          },
+          required: ["decisions"],
+        },
+      },
+      temperature: 0.3,
+    }
+  );
+
+  const result = JSON.parse(response.response);
+  return result.decisions;
+}
+```
+
+## Step 3: Implement Worker Agents
+
+Create `src/agents.ts` with your first agent - the Writer:
+
+```typescript
+export async function writerAgent(
+  prompt: string,
+  env: Env
+): Promise<string> {
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `You are a writer agent specialized in creating clear, concise content.
+          
+Focus on:
+- Clarity and accessibility
+- Conciseness
+- Accuracy
+- Proper formatting`,
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.6,
+      max_tokens: 1024,
+    }
+  );
+
+  return response.response;
+}
+
+export async function analystAgent(
+  data: string,
+  env: Env
+): Promise<string> {
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `You are an analyst agent that extracts insights from data.
+          
+Provide:
+- Key patterns
+- Important metrics
+- Actionable recommendations`,
+        },
+        {
+          role: "user",
+          content: data,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            insights: {
+              type: "array",
+              items: { type: "string" },
+            },
+            recommendations: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+          required: ["insights", "recommendations"],
+        },
+      },
+      temperature: 0.3,
+      max_tokens: 800,
+    }
+  );
+
+  return response.response;
+}
+```
+
+## Step 4: Create the Main Orchestrator
+
+Create `src/index.ts`:
+
+```typescript
+import { Env } from ".";
+import { runConductor } from "./conductor";
+import { writerAgent, analystAgent } from "./agents";
+
+interface HermesResponse {
+  status: "success" | "error";
+  result?: string;
+  error?: string;
+  metadata?: {
+    agentsUsed: string[];
+    confidence: number;
+    executionTime: number;
+  };
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method !== "POST") {
+      return new Response("Send a POST request with JSON body", { status: 400 });
+    }
+
+    try {
+      const startTime = Date.now();
+      const { query } = (await request.json()) as { query: string };
+
+      if (!query) {
+        return new Response(JSON.stringify({ error: "Missing query" }), {
+          status: 400,
+        });
+      }
+
+      // Step 1: Conductor decides routing
+      const routing = await runConductor(query, env);
+
+      // Step 2: Execute based on routing
+      let result = "";
+      const agentsUsed: string[] = [];
+      let totalConfidence = 0;
+
+      for (const decision of routing) {
+        agentsUsed.push(decision.agent);
+        totalConfidence += decision.confidence;
+
+        if (decision.agent === "writer") {
+          result = await writerAgent(decision.task, env);
+        } else if (decision.agent === "analyst") {
+          result = await analystAgent(decision.task, env);
+        }
+
+        // Quality gate: if confidence too low, flag it
+        if (decision.confidence < 0.7) {
+          console.warn(
+            `Low confidence decision from ${decision.agent}: ${decision.confidence}`
+          );
+        }
+      }
+
+      const executionTime = Date.now() - startTime;
+
+      const response: HermesResponse = {
+        status: "success",
+        result,
+        metadata: {
+          agentsUsed,
+          confidence: totalConfidence / routing.length,
+          executionTime,
+        },
+      };
+
+      return new Response(JSON.stringify(response), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      console.error("HERMES Error:", error);
+      const response: HermesResponse = {
+        status: "error",
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+
+      return new Response(JSON.stringify(response), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  },
+} satisfies ExportedHandler<Env>;
+```
+
+## Step 5: Deploy and Test
+
+Deploy your worker:
+
+```bash
+npm run deploy
+```
+
+Test with curl:
+
+```bash
+curl https://your-worker.dev -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Write a product description for an AI assistant"}'
+```
+
+Expected response:
+
+```json
+{
+  "status": "success",
+  "result": "An advanced AI assistant that helps teams automate workflows...",
+  "metadata": {
+    "agentsUsed": ["writer"],
+    "confidence": 0.95,
+    "executionTime": 1234
+  }
+}
+```
+
+## Step 6: Add Memory (Optional but Recommended)
+
+Add persistence with Workers KV:
+
+```typescript
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+}
+
+async function storeMemory(
+  userId: string,
+  message: Message,
+  env: Env
+): Promise<void> {
+  const key = `memory:${userId}`;
+  const existing = (await env.KV.get(key, "json")) as Message[] | null;
+  const messages = existing || [];
+  messages.push(message);
+
+  // Keep last 50 messages
+  if (messages.length > 50) {
+    messages.shift();
+  }
+
+  await env.KV.put(key, JSON.stringify(messages), {
+    expirationTtl: 86400 * 30, // 30 days
+  });
+}
+
+async function getMemory(userId: string, env: Env): Promise<Message[]> {
+  const key = `memory:${userId}`;
+  return ((await env.KV.get(key, "json")) as Message[]) || [];
+}
+```
+
+## Step 7: Scale with More Agents
+
+Add specialized agents for your use case:
+
+```typescript
+// Add to agents.ts
+
+export async function summarizationAgent(
+  text: string,
+  env: Env
+): Promise<string> {
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: "Summarize the provided text in 3-5 sentences.",
+        },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 256,
+    }
+  );
+
+  return response.response;
+}
+
+export async function classificationAgent(
+  text: string,
+  categories: string[],
+  env: Env
+): Promise<string> {
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `Classify the text into one of these categories: ${categories.join(", ")}`,
+        },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            category: { type: "string" },
+            confidence: { type: "number" },
+          },
+          required: ["category", "confidence"],
+        },
+      },
+      temperature: 0.2,
+    }
+  );
+
+  return response.response;
+}
+```
+
+## Common Patterns
+
+### Pattern 1: Content Pipeline
+
+```typescript
+async function contentPipeline(topic: string, env: Env): Promise<string> {
+  // 1. Analyze topic
+  const analysis = await analystAgent(`Research: ${topic}`, env);
+
+  // 2. Write content
+  const content = await writerAgent(
+    `Based on this research: ${analysis}\nWrite an article about ${topic}`,
+    env
+  );
+
+  return content;
+}
+```
+
+### Pattern 2: Multi-turn Conversation
+
+```typescript
+async function chat(
+  userId: string,
+  userMessage: string,
+  env: Env
+): Promise<string> {
+  const memory = await getMemory(userId, env);
+
+  const messages = [
+    ...memory.map((m) => ({ role: m.role, content: m.content })),
+    { role: "user", content: userMessage },
+  ];
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages,
+      temperature: 0.7,
+    }
+  );
+
+  await storeMemory(userId, {
+    role: "user",
+    content: userMessage,
+    timestamp: new Date(),
+  });
+
+  await storeMemory(userId, {
+    role: "assistant",
+    content: response.response,
+    timestamp: new Date(),
+  });
+
+  return response.response;
+}
+```
+
+## Next Steps
+
+1. **Add more agents** for your specific domain
+2. **Implement memory persistence** for context awareness
+3. **Add quality gates** to validate outputs
+4. **Set up monitoring** to track performance
+5. **Integrate external tools** via function calling
+6. **Connect to communication channels** (Telegram, Discord, etc.)
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Low confidence decisions | Add clearer agent descriptions in conductor |
+| Slow responses | Reduce `max_tokens` or use lower temperature |
+| Inconsistent outputs | Increase system prompt specificity |
+| Token limits | Implement context trimming for long conversations |
+
+## Resources
+
+- [HERMES Trinity Architecture Guide](/workers-ai/models/hermes-trinity-architecture/)
+- [Hermes 2 Pro Model Guide](/workers-ai/models/hermes-2-pro-guide/)
+- [Function Calling Documentation](/workers-ai/features/function-calling/)
+- [Workers AI Playground](/workers-ai/playground/)
