@@ -1,0 +1,513 @@
+---
+title: HERMES Trinity - Production Operations & Deployment
+description: Production-grade deployment, monitoring, scaling, and operational procedures for HERMES Trinity
+pcx_content_type: reference
+difficulty: Advanced
+sidebar:
+  order: 14
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Everything you need to run HERMES Trinity reliably in production at scale.
+
+## Production Deployment Architecture
+
+```
+┌─────────────────────────────────────────┐
+│        Users (Multi-Channel)            │
+│  ├─ API Requests                        │
+│  ├─ Telegram Bot                        │
+│  ├─ Discord Bot                         │
+│  └─ Web Interface                       │
+└────────────────┬────────────────────────┘
+                 ▼
+    ┌────────────────────────┐
+    │  Cloudflare CDN        │
+    │  (Caching, DDoS)       │
+    └────────────┬───────────┘
+                 ▼
+    ┌────────────────────────┐
+    │  HERMES Workers        │
+    │  (10-20 instances)     │
+    └────────────┬───────────┘
+                 │
+        ┌────────┼────────┐
+        ▼        ▼        ▼
+    ┌─────┐ ┌─────┐ ┌──────┐
+    │ D1  │ │ KV  │ │ R2   │
+    │(DB) │ │Cache│ │Archive│
+    └─────┘ └─────┘ └──────┘
+```
+
+## Pre-Production Checklist
+
+### 1. Infrastructure
+
+```bash
+# Create production database
+wrangler d1 create hermes-prod --remote
+
+# Create production KV namespace
+wrangler kv:namespace create "hermes-cache" --remote
+
+# Create R2 bucket for archives
+wrangler r2 bucket create hermes-archives
+
+# Verify connectivity
+wrangler tail --remote
+```
+
+### 2. Environment Configuration
+
+`wrangler.toml`:
+
+```toml
+name = "hermes-trinity-prod"
+main = "src/index.ts"
+type = "service"
+compatibility_date = "2026-10-06"
+
+[env.production]
+name = "hermes-trinity-prod"
+route = "https://hermes.yourdomain.com/*"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "hermes-prod"
+id = "your-d1-id"
+
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = "your-kv-id"
+preview_id = "your-kv-preview-id"
+
+[[env.production.r2_buckets]]
+binding = "R2"
+bucket_name = "hermes-archives"
+
+[env.production.vars]
+HERMES_MODEL = "@hf/nousresearch/hermes-2-pro-mistral-7b"
+LOG_LEVEL = "info"
+MAX_TOKENS = "2048"
+BATCH_SIZE = "32"
+CACHE_TTL = "3600"
+
+[env.production.secrets]
+# Set via: wrangler secret put SECRET_NAME --env production
+SLACK_WEBHOOK = ""
+PAGERDUTY_KEY = ""
+SENTRY_DSN = ""
+```
+
+### 3. Security
+
+```bash
+# Set production secrets
+wrangler secret put SLACK_WEBHOOK --env production
+wrangler secret put PAGERDUTY_KEY --env production
+wrangler secret put SENTRY_DSN --env production
+
+# Configure firewall rules in Cloudflare Dashboard
+# - Rate limiting: 1000 req/minute per IP
+# - WAF rules: Block known attack patterns
+# - Bot management: Challenge suspicious traffic
+```
+
+## Deployment Strategy
+
+### Blue-Green Deployment
+
+```bash
+# Deploy to staging
+wrangler deploy --env staging
+
+# Run smoke tests
+npm run test:smoke
+
+# Once verified, deploy to production
+wrangler deploy --env production
+
+# Monitor error rates for 5 minutes
+# If problems: rollback
+wrangler rollback --env production
+```
+
+### Rollback Procedure
+
+```bash
+# View deployment history
+wrangler deployments list --env production
+
+# Rollback to previous version
+wrangler rollback --env production --version <VERSION_ID>
+
+# Verify rollback succeeded
+wrangler tail --env production
+
+# Alert team
+curl -X POST $SLACK_WEBHOOK \
+  -d '{"text":"🔄 HERMES rolled back to v123"}'
+```
+
+## Monitoring and Alerting
+
+### Key Metrics
+
+```typescript
+interface ProductionMetrics {
+  // Latency
+  p50_latency_ms: number; // Target: 500-800ms
+  p95_latency_ms: number; // Target: 1.5-2.5s
+  p99_latency_ms: number; // Target: 3-5s
+
+  // Throughput
+  requests_per_second: number; // Target: 100-500
+  errors_per_second: number; // Target: < 1
+
+  // System Health
+  conductor_confidence: number; // Target: > 0.80
+  success_rate: number; // Target: > 98%
+  cache_hit_rate: number; // Target: > 70%
+
+  // Resources
+  db_latency_ms: number; // Target: < 50ms
+  kv_latency_ms: number; // Target: < 10ms
+  memory_usage_mb: number; // Target: < 128MB
+
+  // Cost
+  tokens_per_request: number; // Target: < 2000
+  cost_per_request: number; // Target: $0.0001-0.0005
+}
+```
+
+### Monitoring Implementation
+
+```typescript
+async function recordMetrics(
+  metrics: ProductionMetrics,
+  env: Env
+): Promise<void> {
+  // Store in D1 for historical analysis
+  await env.DB.prepare(
+    `INSERT INTO metrics (
+      timestamp, p50_latency, p95_latency, p99_latency,
+      requests_per_second, errors_per_second, success_rate,
+      cache_hit_rate, db_latency, kv_latency, tokens_per_request
+    ) VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    metrics.p50_latency_ms,
+    metrics.p95_latency_ms,
+    metrics.p99_latency_ms,
+    metrics.requests_per_second,
+    metrics.errors_per_second,
+    metrics.success_rate,
+    metrics.cache_hit_rate,
+    metrics.db_latency_ms,
+    metrics.kv_latency_ms,
+    metrics.tokens_per_request
+  ).run();
+
+  // Alert if thresholds exceeded
+  if (metrics.p95_latency_ms > 3000) {
+    await alertTeam(
+      "⚠️ High latency detected: " + metrics.p95_latency_ms + "ms",
+      env
+    );
+  }
+
+  if (metrics.success_rate < 0.95) {
+    await alertTeam(
+      "🔴 Low success rate: " + Math.round(metrics.success_rate * 100) + "%",
+      env
+    );
+  }
+
+  if (metrics.errors_per_second > 5) {
+    await alertTeam(
+      "🚨 High error rate: " + metrics.errors_per_second + " errors/sec",
+      env
+    );
+  }
+}
+
+async function alertTeam(message: string, env: Env): Promise<void> {
+  // Send to Slack
+  await fetch(env.SLACK_WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: message,
+      channel: "#hermes-alerts",
+    }),
+  });
+
+  // Send to PagerDuty if critical
+  if (message.includes("🚨")) {
+    await fetch("https://events.pagerduty.com/v2/enqueue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        routing_key: env.PAGERDUTY_KEY,
+        event_action: "trigger",
+        payload: {
+          summary: message,
+          severity: "critical",
+          source: "HERMES Trinity",
+        },
+      }),
+    });
+  }
+}
+```
+
+## Scaling Strategy
+
+### Automatic Scaling
+
+Cloudflare Workers automatically scale based on demand, but configure these thresholds:
+
+```toml
+[limits]
+cpu_ms = 30000  # 30 second CPU timeout
+max_request_size_mb = 100
+
+[env.production.limits]
+# Aggressive limits to force optimization
+cpu_ms = 10000  # 10 seconds
+max_request_size_mb = 10
+
+# Batch size per request
+batch_size = 32
+# If more: queue and process asynchronously
+```
+
+### Queue for High Load
+
+When load exceeds capacity, queue requests:
+
+```typescript
+async function enqueueRequest(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const queue = env.QUEUE;
+  const payload = await request.json();
+
+  // For high-priority requests, process immediately
+  if (payload.priority === "high") {
+    return await processRequest(payload, env);
+  }
+
+  // For normal requests, queue if load is high
+  const currentLoad = await getSystemLoad(env);
+  if (currentLoad > 80) {
+    await queue.send(payload);
+    return new Response(
+      JSON.stringify({
+        status: "queued",
+        requestId: payload.id,
+        message: "Processing high load - request queued",
+      }),
+      { status: 202, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // Low load - process immediately
+  return await processRequest(payload, env);
+}
+
+async function getSystemLoad(env: Env): Promise<number> {
+  const stats = await env.KV.get("system:stats", "json");
+  return stats?.currentLoad || 0;
+}
+```
+
+## Cost Optimization
+
+### Track Token Usage
+
+```typescript
+interface TokenBudget {
+  dailyLimit: number;
+  monthlyLimit: number;
+  currentDaily: number;
+  currentMonthly: number;
+}
+
+async function trackTokens(
+  tokensUsed: number,
+  userId: string,
+  env: Env
+): Promise<void> {
+  // Update daily count
+  const dailyKey = `tokens:daily:${new Date().toISOString().split("T")[0]}`;
+  const daily = (await env.KV.get(dailyKey, "json")) || { total: 0 };
+  daily.total += tokensUsed;
+  await env.KV.put(dailyKey, JSON.stringify(daily), {
+    expirationTtl: 86400, // 24 hours
+  });
+
+  // Check limits
+  if (daily.total > 10000000) {
+    // Stop accepting requests
+    await alertTeam("🛑 Daily token limit reached", env);
+  }
+}
+```
+
+### Cost Breakdown at 1M Requests/Month
+
+```
+Compute (Workers):        $3,000
+  - 500-1000 req/sec
+  - 10-20 instances
+  - Auto-scaling
+
+Storage (D1):             $500
+  - 100GB database
+  - Read replicas
+
+Cache (Workers KV):       $200
+  - 100GB cache
+
+Archive (R2):             $100
+  - Episodic data storage
+
+Monitoring/Logging:       $500
+  - Sentry error tracking
+  - CloudFlare Analytics
+
+Total Monthly Cost:       ~$4,300
+Cost per Request:         ~$0.0004
+```
+
+## Incident Response
+
+### Response Playbook
+
+1. **Detection** (Automated alerts)
+   ```
+   Alert → PagerDuty → On-call engineer
+   ```
+
+2. **Triage** (5 min)
+   - Is it HERMES? Check `/status` endpoint
+   - Is it infrastructure? Check Cloudflare dashboard
+   - Is it KAI fallback? Check n8n webhooks
+
+3. **Mitigation** (10 min)
+   - Scale up Workers if CPU-bound
+   - Clear KV cache if memory issue
+   - Reduce batch size if latency high
+   - Switch to KAI fallback if Conductor failing
+
+4. **Resolution** (30 min)
+   - Deploy fix
+   - Verify metrics return to normal
+   - Document in incident log
+
+5. **Post-Mortem** (Next day)
+   - Review what happened
+   - Update runbooks
+   - Prevent recurrence
+
+### Common Issues and Fixes
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| High latency | Cold starts | Pre-warm instances, enable caching |
+| Memory leak | Unbounded cache | Implement LRU eviction |
+| Token overrun | High complexity requests | Reduce max_tokens, batch simplify |
+| D1 bottleneck | Too many connections | Use read replica, implement connection pooling |
+| Failed routes | Bad conductor prompt | Update system prompt with examples |
+
+## Maintenance Windows
+
+Schedule maintenance during off-peak hours (2-4 AM UTC):
+
+```bash
+# Pre-maintenance
+wrangler deployments list --env production > backup.txt
+
+# Maintenance
+# - Database migrations
+# - Schema updates
+# - Dependency updates
+# - Security patches
+
+# Post-maintenance
+wrangler tail --env production
+# Monitor for 30 minutes
+```
+
+## Compliance and Auditing
+
+### GDPR Compliance
+
+```typescript
+// Implement right to be forgotten
+async function deleteUserData(userId: string, env: Env): Promise<void> {
+  // Delete from all tables
+  await env.DB.prepare(
+    `DELETE FROM episodes WHERE user_id = ?`
+  ).bind(userId).run();
+
+  await env.DB.prepare(
+    `DELETE FROM user_preferences WHERE user_id = ?`
+  ).bind(userId).run();
+
+  // Delete from KV
+  const kvPattern = `user:${userId}:*`;
+  await env.KV.delete(kvPattern);
+
+  // Audit log
+  await env.DB.prepare(
+    `INSERT INTO audit_logs (action, user_id, timestamp)
+     VALUES ('USER_DATA_DELETED', ?, NOW())`
+  ).bind(userId).run();
+}
+```
+
+### Audit Trail
+
+Every action logged:
+
+```sql
+CREATE TABLE audit_logs (
+  id TEXT PRIMARY KEY,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  action TEXT NOT NULL,
+  user_id TEXT,
+  resource TEXT,
+  result TEXT,
+  metadata JSON,
+  retention_days INTEGER DEFAULT 90
+);
+
+CREATE INDEX idx_audit_user ON audit_logs(user_id);
+CREATE INDEX idx_audit_action ON audit_logs(action);
+```
+
+## Runbook
+
+Keep a current runbook:
+
+**[HERMES Trinity Runbook](https://example.com/runbook)**
+
+Key sections:
+- Architecture diagram
+- Deployment procedure
+- Incident response
+- Common issues and fixes
+- Escalation contacts
+- Disaster recovery
+
+---
+
+You're now ready to run HERMES Trinity in production reliably and at scale! 🚀
+
+Monitor continuously, iterate on optimizations, and let the system learn and improve autonomously.
