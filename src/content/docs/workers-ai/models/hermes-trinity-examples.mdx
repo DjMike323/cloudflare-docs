@@ -1,0 +1,554 @@
+---
+title: HERMES Trinity - Real-World Examples
+description: Production examples and patterns for HERMES Trinity autonomous multi-agent systems
+pcx_content_type: example
+difficulty: Advanced
+sidebar:
+  order: 15
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Complete working examples of HERMES Trinity in production scenarios.
+
+## Example 1: Content Creation Pipeline
+
+Multi-agent system that plans, writes, and optimizes content.
+
+```typescript
+// Example: Blog post creation workflow
+interface ContentRequest {
+  topic: string;
+  audience: string;
+  wordCount: number;
+  userId: string;
+}
+
+async function contentPipeline(
+  request: ContentRequest,
+  env: Env
+): Promise<{ draft: string; outline: string; metadata: object }> {
+  const startTime = Date.now();
+
+  // 1. Conductor determines workflow
+  const routing = await conductorAgent(
+    `Create blog post about "${request.topic}" for ${request.audience}`,
+    env
+  );
+
+  // 2. Planner generates outline
+  const outline = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert content strategist. Create a detailed outline.",
+        },
+        {
+          role: "user",
+          content: `Topic: ${request.topic}\nAudience: ${request.audience}\nLength: ${request.wordCount} words`,
+        },
+      ],
+      temperature: 0.5,
+      max_tokens: 1024,
+    }
+  );
+
+  // 3. Writer generates draft
+  const draft = await writerAgent(
+    `Using this outline, write the blog post:\n${outline.response}`,
+    env
+  );
+
+  // 4. Store experience in memory
+  await storeExperience(
+    {
+      id: `content_${Date.now()}`,
+      userId: request.userId,
+      request: JSON.stringify(request),
+      decision: routing,
+      agents: ["planner", "writer"],
+      result: draft,
+      success: true,
+      userRating: 0,
+      costTokens: 2500,
+      latencyMs: Date.now() - startTime,
+    },
+    env
+  );
+
+  return {
+    draft,
+    outline: outline.response,
+    metadata: {
+      agent: routing.agent,
+      confidence: routing.confidence,
+      executionTime: Date.now() - startTime,
+    },
+  };
+}
+```
+
+## Example 2: Data Analysis with Autonomous Learning
+
+System that analyzes data and improves accuracy through Unidad Dos memory.
+
+```typescript
+interface AnalysisRequest {
+  data: string;
+  analysisType: "sentiment" | "patterns" | "anomalies";
+  userId: string;
+}
+
+async function analysisWithLearning(
+  request: AnalysisRequest,
+  env: Env
+): Promise<object> {
+  const startTime = Date.now();
+
+  // 1. Retrieve relevant learned patterns from memory
+  const learnedPatterns = await env.DB.prepare(
+    `SELECT concept, definition, confidence FROM semantic_memory 
+     WHERE concept LIKE ? 
+     ORDER BY confidence DESC LIMIT 5`
+  )
+    .bind(`%${request.analysisType}%`)
+    .all();
+
+  // 2. Analyst performs analysis with context
+  const context = learnedPatterns.results
+    .map((p: any) => `${p.concept}: ${p.definition}`)
+    .join("\n");
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert analyst. ${
+            context ? `Use these learned patterns:\n${context}` : ""
+          }`,
+        },
+        {
+          role: "user",
+          content: `${request.analysisType} analysis of: ${request.data}`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            insights: { type: "array", items: { type: "string" } },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            patterns: { type: "array", items: { type: "string" } },
+          },
+          required: ["insights", "confidence", "patterns"],
+        },
+      },
+      temperature: 0.3,
+    }
+  );
+
+  const analysis = JSON.parse(response.response);
+
+  // 3. Extract and store new patterns in semantic memory
+  for (const pattern of analysis.patterns) {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO semantic_memory (id, concept, definition, confidence, source)
+       VALUES (?, ?, ?, ?, 'analysis')`
+    )
+      .bind(
+        `pattern_${Date.now()}_${Math.random()}`,
+        pattern,
+        `Pattern identified in ${request.analysisType} analysis`,
+        analysis.confidence
+      )
+      .run();
+  }
+
+  // 4. Cache result for future learning
+  await env.KV.put(
+    `analysis:${request.analysisType}:${Date.now()}`,
+    JSON.stringify(analysis),
+    { expirationTtl: 604800 } // 7 days
+  );
+
+  return {
+    ...analysis,
+    executionTime: Date.now() - startTime,
+    patternsLearned: analysis.patterns.length,
+  };
+}
+```
+
+## Example 3: Task Execution with Fallback
+
+Executor agent with automatic fallback to KAI workflows on high uncertainty.
+
+```typescript
+interface TaskExecution {
+  task: string;
+  priority: "low" | "medium" | "high";
+  userId: string;
+}
+
+async function executeWithFallback(
+  execution: TaskExecution,
+  env: Env
+): Promise<{ result: string; executedBy: "hermes" | "kai"; confidence: number }> {
+  // 1. Route with Conductor
+  const routing = await conductorAgent(execution.task, env);
+
+  // 2. If confidence is high, use HERMES executor
+  if (routing.confidence > 0.7) {
+    const result = await executorAgent(routing.task, env);
+
+    // Store successful execution
+    await env.DB.prepare(
+      `INSERT INTO procedures (id, workflow_name, steps, success_rate)
+       VALUES (?, ?, ?, ?)`
+    )
+      .bind(
+        `exec_${Date.now()}`,
+        routing.task,
+        JSON.stringify({ confidence: routing.confidence }),
+        0.95
+      )
+      .run();
+
+    return {
+      result,
+      executedBy: "hermes",
+      confidence: routing.confidence,
+    };
+  }
+
+  // 3. Else fallback to KAI
+  const kaiResponse = await fetch(
+    "https://n8n.yourdomain.com/webhook/execute",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: execution.task,
+        priority: execution.priority,
+      }),
+    }
+  );
+
+  const kaiResult = await kaiResponse.text();
+
+  // 4. Store fallback usage for analysis
+  await env.DB.prepare(
+    `INSERT INTO episodes (id, user_id, request_text, conductor_decision, agents_executed, result, success)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      `ep_${Date.now()}`,
+      execution.userId,
+      execution.task,
+      JSON.stringify({ fallback: true, hermes_confidence: routing.confidence }),
+      JSON.stringify(["kai_fallback"]),
+      kaiResult,
+      true
+    )
+    .run();
+
+  return {
+    result: kaiResult,
+    executedBy: "kai",
+    confidence: routing.confidence,
+  };
+}
+```
+
+## Example 4: Multi-Tenant System with Isolation
+
+Enterprise deployment with complete tenant isolation.
+
+```typescript
+interface TenantContext {
+  tenantId: string;
+  userId: string;
+  request: string;
+  isolationLevel: "standard" | "strict";
+}
+
+async function multiTenantRequest(
+  context: TenantContext,
+  env: Env
+): Promise<object> {
+  // 1. Verify tenant authorization
+  const tenant = await env.DB.prepare(
+    `SELECT id, subscription_level, rate_limit FROM tenants WHERE id = ?`
+  )
+    .bind(context.tenantId)
+    .first();
+
+  if (!tenant) {
+    return { error: "Unauthorized", statusCode: 403 };
+  }
+
+  // 2. Check rate limits
+  const key = `ratelimit:${context.tenantId}:${Math.floor(Date.now() / 60000)}`;
+  const requestCount = await env.KV.get(key, "json");
+  if (requestCount && requestCount.count >= tenant.rate_limit) {
+    return { error: "Rate limit exceeded", statusCode: 429 };
+  }
+
+  // 3. Route with tenant context
+  const routing = await conductorAgent(context.request, env);
+
+  // 4. Execute with tenant isolation
+  let result;
+  if (routing.agent === "writer") {
+    result = await writerAgent(routing.task, env);
+  } else if (routing.agent === "analyst") {
+    result = await analystAgent(routing.task, env);
+  }
+
+  // 5. Store in tenant-isolated database
+  const tenantDB = env.DB; // In production, use tenant-specific DB shard
+  await tenantDB
+    .prepare(
+      `INSERT INTO tenant_episodes (tenant_id, user_id, request_text, result, timestamp)
+       VALUES (?, ?, ?, ?, datetime('now'))`
+    )
+    .bind(context.tenantId, context.userId, context.request, result)
+    .run();
+
+  // 6. Update rate limit counter
+  await env.KV.put(
+    key,
+    JSON.stringify({ count: (requestCount?.count || 0) + 1 }),
+    { expirationTtl: 60 }
+  );
+
+  // 7. Log for audit trail
+  await tenantDB
+    .prepare(
+      `INSERT INTO audit_logs (tenant_id, user_id, action, resource, result, timestamp)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`
+    )
+    .bind(
+      context.tenantId,
+      context.userId,
+      "REQUEST_PROCESSED",
+      routing.agent,
+      "SUCCESS"
+    )
+    .run();
+
+  return {
+    result,
+    agent: routing.agent,
+    tenantId: context.tenantId,
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+## Example 5: Batch Processing with Semantic Caching
+
+Efficient batch processing that learns from similar requests.
+
+```typescript
+interface BatchItem {
+  id: string;
+  query: string;
+  priority: number;
+}
+
+async function processBatchWithCache(
+  items: BatchItem[],
+  env: Env
+): Promise<Array<{ id: string; result: string; cached: boolean }>> {
+  const results: Array<{ id: string; result: string; cached: boolean }> = [];
+
+  // 1. Group similar queries using semantic memory
+  const queryGroups = await groupSimilarQueries(items, env);
+
+  // 2. Process each group
+  for (const group of queryGroups) {
+    const representative = group[0];
+
+    // 3. Check semantic cache
+    const cacheKey = `semantic:${group[0].query}`;
+    const cached = await env.KV.get(cacheKey, "json");
+
+    if (cached && cached.confidence > 0.85) {
+      // Use cached result
+      for (const item of group) {
+        results.push({
+          id: item.id,
+          result: cached.result,
+          cached: true,
+        });
+      }
+      continue;
+    }
+
+    // 4. Process representative query
+    const routing = await conductorAgent(representative.query, env);
+    let result: string;
+
+    if (routing.agent === "writer") {
+      result = await writerAgent(routing.task, env);
+    } else if (routing.agent === "analyst") {
+      result = await analystAgent(routing.task, env);
+    } else {
+      result = await executorAgent(routing.task, env);
+    }
+
+    // 5. Cache result with metadata
+    await env.KV.put(
+      cacheKey,
+      JSON.stringify({
+        result,
+        confidence: routing.confidence,
+        timestamp: Date.now(),
+        itemCount: group.length,
+      }),
+      { expirationTtl: 3600 } // 1 hour
+    );
+
+    // 6. Apply to all items in group
+    for (const item of group) {
+      results.push({
+        id: item.id,
+        result,
+        cached: false,
+      });
+    }
+  }
+
+  return results;
+}
+
+async function groupSimilarQueries(
+  items: BatchItem[],
+  env: Env
+): Promise<BatchItem[][]> {
+  // Implementation: group queries by semantic similarity
+  // Could use embedding distance or simple string similarity
+  const groups: { [key: string]: BatchItem[] } = {};
+
+  for (const item of items) {
+    const hash = hashQuery(item.query); // Simple hash for demo
+    if (!groups[hash]) groups[hash] = [];
+    groups[hash].push(item);
+  }
+
+  return Object.values(groups);
+}
+
+function hashQuery(query: string): string {
+  return query.substring(0, 20);
+}
+```
+
+## Example 6: Real-Time Monitoring & Alerts
+
+Complete monitoring setup with automated incident response.
+
+```typescript
+async function monitorAndAlert(env: Env): Promise<void> {
+  // 1. Collect metrics from last minute
+  const metrics = await env.DB.prepare(
+    `SELECT AVG(p95_latency) as avg_p95, 
+            COUNT(*) as request_count,
+            SUM(CASE WHEN success THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as success_rate
+     FROM metrics 
+     WHERE timestamp > datetime('now', '-1 minute')`
+  ).first();
+
+  // 2. Check against thresholds
+  const alerts = [];
+
+  if (metrics.avg_p95 > 2500) {
+    alerts.push({
+      severity: "critical",
+      message: `High latency: P95 = ${Math.round(metrics.avg_p95)}ms`,
+    });
+  }
+
+  if (metrics.success_rate < 0.95) {
+    alerts.push({
+      severity: "high",
+      message: `Low success rate: ${Math.round(metrics.success_rate * 100)}%`,
+    });
+  }
+
+  if (metrics.request_count > 1000) {
+    alerts.push({
+      severity: "info",
+      message: `High throughput: ${metrics.request_count} requests/minute`,
+    });
+  }
+
+  // 3. Send alerts via multiple channels
+  for (const alert of alerts) {
+    // Slack
+    await fetch(env.SLACK_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: `🚨 ${alert.severity.toUpperCase()}: ${alert.message}`,
+        channel: "#hermes-alerts",
+      }),
+    });
+
+    // PagerDuty for critical
+    if (alert.severity === "critical") {
+      await fetch("https://events.pagerduty.com/v2/enqueue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          routing_key: env.PAGERDUTY_KEY,
+          event_action: "trigger",
+          payload: {
+            summary: alert.message,
+            severity: "critical",
+            source: "HERMES Trinity",
+          },
+        }),
+      });
+    }
+
+    // Store in audit log
+    await env.DB.prepare(
+      `INSERT INTO audit_logs (action, resource, result, metadata)
+       VALUES (?, ?, ?, ?)`
+    )
+      .bind("ALERT_SENT", alert.severity, "SUCCESS", JSON.stringify(alert))
+      .run();
+  }
+}
+```
+
+## Key Patterns Summary
+
+| Pattern | Use Case | Complexity |
+| --- | --- | --- |
+| **Content Pipeline** | Multi-step workflows (plan → write → review) | Medium |
+| **Learning Loop** | Improve accuracy over time via memory | Medium |
+| **Fallback Strategy** | High-confidence HERMES, fallback to KAI | High |
+| **Multi-Tenant** | Enterprise deployments with isolation | High |
+| **Batch Processing** | Efficient bulk operations with caching | Medium |
+| **Monitoring** | Production observability and alerts | Low |
+
+## Next Steps
+
+1. Adapt these examples to your use case
+2. Implement custom agents for your domain
+3. Monitor Unidad Dos learning metrics
+4. Tune conductor confidence thresholds
+5. Deploy to production with full monitoring
+
+See the [Production Operations guide](/workers-ai/models/hermes-trinity-production-ops/) for deployment and scaling strategies.

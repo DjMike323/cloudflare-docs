@@ -1,0 +1,427 @@
+---
+title: HERMES Trinity Learning Path
+description: Guided learning journey for building production HERMES Trinity systems
+pcx_content_type: learning-unit
+difficulty: Intermediate
+sidebar:
+  order: 0
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+A structured learning path from zero to production with HERMES Trinity.
+
+## 🚀 Quick Timeline
+
+- **15 minutes**: Deploy your first system
+- **1 hour**: Production-ready system with monitoring
+- **4 hours**: Advanced patterns and optimization
+- **Ongoing**: Autonomous learning through Unidad Dos
+
+---
+
+## Phase 1: Foundation (30 minutes)
+
+### What You'll Learn
+- HERMES Trinity architecture (Conductor, Memory, Workers)
+- Unidad Dos four-layer memory system
+- How routing decisions work
+- Basic deployment
+
+### Reading Order
+
+1. **[HERMES Trinity Architecture](/workers-ai/models/hermes-trinity-architecture/)**
+   - High-level system design
+   - Three-unit pattern explanation
+   - Component interactions
+   - When to use HERMES vs alternatives
+   - **Time: 10 minutes**
+
+2. **[Memory System (Unidad Dos)](/workers-ai/models/hermes-trinity-memory-system/)**
+   - Four-layer learning system
+   - Episodic memory (what happened)
+   - Semantic memory (what we learned)
+   - Procedural memory (what works)
+   - Task state (in progress)
+   - **Time: 15 minutes**
+
+3. **[Hermes 2 Pro Model Guide](/workers-ai/models/hermes-2-pro/)**
+   - Model selection criteria
+   - Performance characteristics
+   - Token optimization
+   - Temperature tuning
+   - **Time: 5 minutes**
+
+### Checkpoint
+- [ ] Can explain the three units of HERMES Trinity
+- [ ] Understand why autonomous learning matters
+- [ ] Know when to use semantic vs procedural memory
+
+---
+
+## Phase 2: Getting Started (1 hour)
+
+### What You'll Learn
+- Deploy a working system in 15 minutes
+- Implement all core components
+- Set up local testing
+- Basic production deployment
+
+### Reading Order
+
+1. **[Complete Getting Started Guide](/workers-ai/models/hermes-trinity-getting-started/)**
+   - Step-by-step 8-step deployment
+   - Conductor agent implementation
+   - Worker agents (Writer, Analyst)
+   - Memory setup with D1
+   - Local testing
+   - **Time: 30 minutes**
+   - **Code Output**: Working system at localhost:8787
+
+2. **[Starter Template](/workers-ai/models/hermes-trinity-starter-template/)**
+   - Project structure
+   - Configuration files
+   - Testing setup
+   - Deployment checklist
+   - **Time: 15 minutes**
+   - **Outcome**: Understand full project layout
+
+### Practical Exercise
+Deploy the getting started example locally:
+
+```bash
+npm create cloudflare -- hermes-demo
+cd hermes-demo
+wrangler dev
+# Test: curl http://localhost:8787 -X POST \
+#  -H "Content-Type: application/json" \
+#  -d '{"query":"test","userId":"test"}'
+```
+
+### Checkpoint
+- [ ] System running locally
+- [ ] Can make requests and see routing decisions
+- [ ] Database populated with episodes
+- [ ] Know where to find generated configuration
+
+---
+
+## Phase 3: Production Operations (1 hour)
+
+### What You'll Learn
+- Deploy to production safely
+- Monitor system health
+- Scale to 1M+ requests
+- Handle incidents
+- Optimize costs
+
+### Reading Order
+
+1. **[Production Operations & Deployment](/workers-ai/models/hermes-trinity-production-ops/)**
+   - Infrastructure architecture
+   - Pre-production checklist
+   - Blue-green deployment
+   - Monitoring setup
+   - Key metrics to track
+   - Scaling strategy
+   - Cost optimization
+   - Incident response playbook
+   - **Time: 45 minutes**
+
+2. **[Advanced Patterns & Optimization](/workers-ai/models/hermes-trinity-advanced-patterns/)**
+   - Hierarchical conductor
+   - Request batching
+   - Tiered caching (L1/L2/L3)
+   - Semantic caching
+   - Multi-tenant isolation
+   - Audit logging
+   - **Time: 15 minutes**
+
+### Monitoring Setup
+Use this checklist before deploying:
+
+- [ ] D1 database created and indexed
+- [ ] KV cache configured
+- [ ] R2 archive bucket ready
+- [ ] Slack/PagerDuty webhooks set
+- [ ] Monitoring alerts configured
+- [ ] Runbook documented
+- [ ] Rollback plan ready
+
+### Checkpoint
+- [ ] Ready to deploy to production
+- [ ] Know how to monitor system health
+- [ ] Can identify and fix common issues
+- [ ] Understand scaling limits
+- [ ] Cost estimation complete
+
+---
+
+## Phase 4: Real-World Implementation (2 hours)
+
+### What You'll Learn
+- Adapt HERMES to your domain
+- Implement custom agents
+- Use memory for optimization
+- Handle production complexity
+- Integrate with existing systems
+
+### Reading Order
+
+1. **[Real-World Examples](/workers-ai/models/hermes-trinity-examples/)**
+   - Content creation pipeline
+   - Data analysis with learning
+   - Task execution with fallback
+   - Multi-tenant system
+   - Batch processing
+   - Monitoring & alerts
+   - **Time: 60 minutes**
+   - **Practice**: Adapt one example to your use case
+
+2. **[KAI Integration Guide](/workers-ai/models/hermes-kai-integration-guide/)**
+   - HERMES vs KAI comparison
+   - When to use each system
+   - Complementary strengths
+   - Cost analysis
+   - **Time: 20 minutes**
+
+3. **[Hybrid HERMES + KAI Implementation](/workers-ai/models/hermes-kai-hybrid-implementation/)**
+   - Hybrid routing patterns
+   - Fallback strategies
+   - Combined deployment
+   - Testing both systems
+   - **Time: 20 minutes**
+
+### Build Your First Agent
+
+Create a custom agent for your domain:
+
+```typescript
+// Custom domain-specific agent
+export async function myDomainAgent(
+  input: string,
+  env: Env
+): Promise<string> {
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert in [YOUR DOMAIN]. Be specific and actionable.",
+        },
+        { role: "user", content: input },
+      ],
+      temperature: 0.3,
+      max_tokens: 1024,
+    }
+  );
+  return response.response;
+}
+```
+
+### Checkpoint
+- [ ] First custom agent implemented
+- [ ] Integrated into conductor
+- [ ] Tested locally
+- [ ] Memory system tracking performance
+- [ ] Know when to use KAI fallback
+
+---
+
+## Phase 5: Optimization & Scaling (Ongoing)
+
+### Continuous Learning
+
+After deployment, monitor these metrics:
+
+- **Learning Progress**: Track Unidad Dos pattern extraction
+- **Latency Trends**: P50, P95, P99 should improve over time
+- **Cache Hit Rate**: Target > 70% with optimization
+- **Token Efficiency**: Reduce tokens/request through batching
+
+### Advanced Topics to Explore
+
+1. **Semantic Caching**
+   - Group similar requests
+   - Share results across users
+   - Expected: 40-50% latency improvement
+
+2. **Batch Processing**
+   - Process 10-20 requests together
+   - Significant token savings
+   - Expected: 60% cost reduction
+
+3. **Hierarchical Conductor**
+   - Multi-level routing
+   - Specialized sub-conductors
+   - Better routing confidence
+
+4. **Distributed Tracing**
+   - Track requests across components
+   - Identify bottlenecks
+   - Debug complex workflows
+
+### Monitoring Dashboard
+
+Create a dashboard tracking:
+
+```
+Real-time Metrics:
+├── Requests/second (target: 100-500)
+├── P95 Latency (target: 1.5-2.5s)
+├── Success rate (target: > 98%)
+└── Cache hit rate (target: > 70%)
+
+Learning Metrics:
+├── Patterns extracted/day
+├── Semantic memory size
+├── Procedural success rate
+└── Routing confidence trend
+
+Cost Metrics:
+├── Tokens/request (trending down)
+├── Cost/request
+├── Cache savings
+└── Batch efficiency
+```
+
+---
+
+## 📚 Full Documentation Map
+
+```
+Foundation
+├─ Architecture
+├─ Memory System
+└─ Model Guide
+
+Getting Started
+├─ Step-by-Step Guide (1 hour)
+├─ Starter Template
+└─ Quick Start
+
+Production
+├─ Operations & Deployment
+├─ Advanced Patterns
+└─ Examples
+
+Integration
+├─ KAI Comparison
+├─ Hybrid Implementation
+└─ Real-World Examples
+```
+
+---
+
+## 🎯 Learning Outcomes by Phase
+
+| Phase | Outcome | Time | Hands-On |
+| --- | --- | --- | --- |
+| 1 | Understand architecture | 30 min | Reading |
+| 2 | Deploy working system | 1 hr | Build locally |
+| 3 | Production ready | 1 hr | Configure & deploy |
+| 4 | Custom implementation | 2 hrs | Write code |
+| 5 | Optimize & scale | Ongoing | Monitor & iterate |
+
+---
+
+## 🚀 Next Steps After Learning Path
+
+1. **Clone the starter template**
+   ```bash
+   git clone https://github.com/yourusername/hermes-trinity-starter.git
+   ```
+
+2. **Deploy to staging**
+   - Follow production operations guide
+   - Set up monitoring
+   - Run smoke tests
+
+3. **Implement custom agents**
+   - Adapt examples to your domain
+   - Train Unidad Dos memory
+   - Optimize prompts
+
+4. **Monitor and iterate**
+   - Check metrics daily first week
+   - Adjust temperature/tokens
+   - Let autonomous learning work
+   - Optimize based on real usage
+
+5. **Scale confidently**
+   - Use batching for 40% latency gain
+   - Implement semantic cache
+   - Monitor cost per request
+   - Add more agents incrementally
+
+---
+
+## 📖 Additional Resources
+
+- **[GitHub Template](https://github.com/yourorg/hermes-trinity-starter)** - Clone and deploy
+- **[Cloudflare Workers Docs](/workers/)** - Platform fundamentals
+- **[AI Models Reference](/workers-ai/models/)** - All available models
+- **[Community Discussions](https://community.cloudflare.com)** - Ask questions
+
+---
+
+## Quick Reference Cards
+
+<Details>
+<summary>Architecture Quick Reference</summary>
+
+**Conductor (Router)**
+- Decides which agent to use
+- Uses Hermes 2 Pro for intelligent routing
+- Returns confidence score
+- Temperature: 0.3 (precise)
+
+**Worker Agents**
+- Writer: Content generation (0.6 temperature)
+- Analyst: Data analysis with JSON output (0.3 temperature)
+- Executor: Task execution (varies)
+
+**Unidad Dos (Memory)**
+- Episodic: D1 database, 30-day retention
+- Semantic: Learned concepts, embeddings
+- Procedural: Workflows that work
+- Task State: Current in-progress work
+
+**Storage**
+- D1: Persistent learning
+- KV: Fast cache (1-hour TTL typical)
+- R2: Archive/audit logs
+
+</Details>
+
+<Details>
+<summary>Performance Targets</summary>
+
+**Latency**
+- P50: 500-800ms (↓ 40% with learning)
+- P95: 1.5-2.5s
+- P99: 3-5s
+
+**Throughput**
+- 100-500 req/sec per instance
+- Auto-scales to 1000+ with Workers
+- Batch processing adds 40% efficiency
+
+**Success Rate**
+- Target: > 98%
+- With KAI fallback: > 99%
+
+**Cost**
+- ~$3,700/month at 1M requests
+- ~$0.0004 per request
+- Reduces 60% with batching
+
+</Details>
+
+---
+
+You now have a complete learning path from zero to production with HERMES Trinity! Start with Phase 1 and progress at your own pace. 🎓
