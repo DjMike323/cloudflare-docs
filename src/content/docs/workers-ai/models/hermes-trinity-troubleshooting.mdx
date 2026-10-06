@@ -1,0 +1,591 @@
+---
+title: HERMES Trinity - Troubleshooting & FAQ
+description: Solve common issues, optimize performance, and debug HERMES Trinity systems
+pcx_content_type: troubleshooting
+difficulty: Intermediate
+sidebar:
+  order: 17
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Solutions for common HERMES Trinity issues and optimization questions.
+
+## Performance Issues
+
+### High Latency (P95 > 2.5s)
+
+**Symptoms**
+- Requests taking longer than expected
+- Inconsistent response times
+- Cold start delays
+
+**Diagnosis**
+
+```bash
+# Check recent latency metrics
+wrangler d1 execute hermes-memory --remote \
+  "SELECT AVG(latency_ms) as avg, MAX(latency_ms) as max, COUNT(*) as count
+   FROM episodes
+   WHERE timestamp > datetime('now', '-1 hour')
+   GROUP BY strftime('%M', timestamp)"
+
+# Check conductor confidence (low = longer processing)
+wrangler d1 execute hermes-memory --remote \
+  "SELECT agent, AVG(CAST(json_extract(conductor_decision, '$.confidence') AS REAL)) as avg_confidence
+   FROM episodes
+   WHERE timestamp > datetime('now', '-1 hour')
+   GROUP BY agent"
+```
+
+**Solutions**
+
+| Issue | Cause | Fix |
+| --- | --- | --- |
+| Cold start | Workers spinning up | Pre-warm with health check every 5 min |
+| High complexity | Too many tokens | Lower `max_tokens` from 2048 to 1024 |
+| Memory overhead | Large context | Reduce `getContext()` limit from 20 to 5 |
+| DB latency | Unindexed queries | Add indexes: `CREATE INDEX idx_episodes_timestamp ON episodes(timestamp)` |
+| KV cache miss | Low TTL | Increase from 1 hour to 24 hours for patterns |
+
+**Quick Fix Checklist**
+
+```bash
+# 1. Enable response caching in Workers
+cache-control: public, max-age=300
+
+# 2. Reduce context window
+getContext(userId, env, { limit: 5 }) // was 20
+
+# 3. Lower token budget
+MAX_TOKENS=1024 // was 2048
+
+# 4. Batch similar requests
+await processBatch(requests) // reduces latency 40%
+```
+
+---
+
+### Low Conductor Confidence
+
+**Symptoms**
+- Routing decisions showing < 0.7 confidence
+- Requests falling back to KAI frequently
+- Uncertain agent selection
+
+**Root Cause Analysis**
+
+```typescript
+// Check confidence distribution
+async function analyzeConfidence(env: Env) {
+  const results = await env.DB.prepare(
+    `SELECT
+      CAST(json_extract(conductor_decision, '$.confidence') AS REAL) as confidence,
+      COUNT(*) as count
+     FROM episodes
+     WHERE timestamp > datetime('now', '-24 hours')
+     GROUP BY ROUND(confidence, 1)
+     ORDER BY confidence DESC`
+  ).all();
+
+  console.log("Confidence distribution:", results.results);
+}
+```
+
+**Solutions**
+
+| Confidence Range | Meaning | Fix |
+| --- | --- | --- |
+| 0.9+ | Excellent | No change needed |
+| 0.7-0.9 | Good | Monitor, adjust temperature slightly |
+| 0.5-0.7 | Uncertain | Improve system prompt with examples |
+| < 0.5 | Poor | Retrain or add more context |
+
+**Improve Conductor Prompts**
+
+```typescript
+// Current: Generic prompt
+"Route requests to the right agent"
+
+// Better: Specific examples
+`Route requests to the right agent:
+Examples of WRITER tasks:
+- "Write a blog post about..."
+- "Create copy for..."
+- "Draft an email..."
+
+Examples of ANALYST tasks:
+- "Analyze this data..."
+- "Extract insights from..."
+- "Compare these datasets..."
+
+Examples of EXECUTOR tasks:
+- "Run this workflow..."
+- "Execute this task..."
+- "Perform this operation..."`
+```
+
+---
+
+## Memory & Learning Issues
+
+### Unidad Dos Not Learning
+
+**Symptoms**
+- Semantic memory table empty
+- Same types of queries not improving
+- No pattern extraction
+
+**Check Learning Pipeline**
+
+```bash
+# Verify episodic memory is being stored
+wrangler d1 execute hermes-memory --remote \
+  "SELECT COUNT(*) as episode_count FROM episodes WHERE timestamp > datetime('now', '-1 hour')"
+
+# Check if patterns are being extracted
+wrangler d1 execute hermes-memory --remote \
+  "SELECT COUNT(*) as pattern_count FROM semantic_memory"
+
+# Check procedural memory
+wrangler d1 execute hermes-memory --remote \
+  "SELECT COUNT(*) as procedure_count FROM procedures"
+```
+
+**Common Causes & Fixes**
+
+```typescript
+// ❌ Problem: Success rate not stored
+await storeExperience({
+  success: true, // Must be true to learn
+  confidence: 0.5 // Low confidence not stored
+});
+
+// ✅ Solution: Store only successful, confident executions
+if (routing.confidence > 0.75 && result.success) {
+  await storeExperience(experience);
+}
+
+// ❌ Problem: Not extracting patterns
+// No semantic memory insertion
+
+// ✅ Solution: Extract and store patterns
+if (routing.confidence > 0.8) {
+  await env.DB.prepare(
+    `INSERT INTO semantic_memory (id, concept, definition, confidence, source)
+     VALUES (?, ?, ?, ?, 'high_confidence_execution')`
+  ).bind(...).run();
+}
+```
+
+**Force Learning Restart**
+
+```typescript
+// Clear and reinitialize learning
+async function resetLearning(env: Env) {
+  // Keep episodes for analysis
+  // Clear failed patterns
+  await env.DB.prepare("DELETE FROM semantic_memory WHERE confidence < 0.6").run();
+
+  // Reset procedural memory
+  await env.DB.prepare("DELETE FROM procedures WHERE success_rate < 0.7").run();
+
+  // Clear old cache
+  await env.KV.delete("episode:*");
+
+  console.log("Learning system reset - restarting from confident patterns only");
+}
+```
+
+---
+
+## Database Issues
+
+### D1 Performance Degradation
+
+**Symptoms**
+- Queries taking > 100ms
+- Connection timeouts
+- Memory errors
+
+**Diagnosis & Fixes**
+
+```bash
+# Check query performance
+wrangler d1 execute hermes-memory --remote \
+  "EXPLAIN QUERY PLAN
+   SELECT * FROM episodes WHERE user_id = 'x' AND timestamp > ?"
+
+# Expected: Uses index
+# Actual: Full table scan? → Add index
+
+# Solution: Add missing indexes
+wrangler d1 execute hermes-memory --remote \
+  "CREATE INDEX IF NOT EXISTS idx_episodes_user_timestamp 
+   ON episodes(user_id, timestamp DESC)"
+```
+
+**Essential Indexes**
+
+```sql
+-- Episodes table
+CREATE INDEX idx_episodes_user_timestamp ON episodes(user_id, timestamp DESC);
+CREATE INDEX idx_episodes_success ON episodes(success, timestamp DESC);
+
+-- Semantic memory
+CREATE INDEX idx_semantic_concept ON semantic_memory(concept);
+CREATE INDEX idx_semantic_confidence ON semantic_memory(confidence DESC);
+
+-- Procedures
+CREATE INDEX idx_procedures_success_rate ON procedures(success_rate DESC);
+
+-- Metrics
+CREATE INDEX idx_metrics_timestamp ON metrics(timestamp DESC);
+```
+
+**Connection Pool**
+
+```typescript
+// ❌ Problem: Creating new connection per request
+const db = env.DB.prepare(query).run();
+
+// ✅ Solution: Connection pooling (built-in with D1)
+// No action needed - D1 handles automatically
+```
+
+---
+
+## Token & Cost Issues
+
+### Unexpectedly High Token Usage
+
+**Symptoms**
+- Token count growing faster than requests
+- Cost per request increasing
+- Quota warnings
+
+**Analyze Token Usage**
+
+```bash
+# Get token consumption by agent
+wrangler d1 execute hermes-memory --remote \
+  "SELECT
+     json_extract(conductor_decision, '$.agent') as agent,
+     AVG(cost_tokens) as avg_tokens,
+     SUM(cost_tokens) as total_tokens,
+     COUNT(*) as request_count
+   FROM episodes
+   WHERE timestamp > datetime('now', '-7 days')
+   GROUP BY agent
+   ORDER BY total_tokens DESC"
+```
+
+**Solutions**
+
+| Problem | Cause | Fix |
+| --- | --- | --- |
+| High max_tokens | Over-generous budget | Reduce from 2048 to 1024-1500 |
+| Verbose prompts | Repeating context | Extract to system message only |
+| No caching | Reprocessing similar requests | Implement semantic cache with KV |
+| Temperature too high | Creative mode uses more tokens | Lower from 0.6-0.8 to 0.3-0.4 |
+| Batch size 1 | No batch efficiency | Increase batch_size from 32 to 64-128 |
+
+**Token Budget Template**
+
+```typescript
+interface TokenBudget {
+  dailyLimit: 10_000_000; // 10M per day
+  maxPerRequest: 2000;
+  warningThreshold: 8_000_000; // Alert at 80%
+
+  async track(tokensUsed: number, env: Env) {
+    const today = new Date().toISOString().split("T")[0];
+    const key = `tokens:daily:${today}`;
+    const current = (await env.KV.get(key, "json")) || { total: 0 };
+    current.total += tokensUsed;
+    await env.KV.put(key, JSON.stringify(current), { expirationTtl: 86400 });
+
+    if (current.total > this.warningThreshold) {
+      await alertTeam(`Token usage warning: ${current.total.toLocaleString()}`);
+    }
+  }
+}
+```
+
+---
+
+## Memory Leaks & Resource Issues
+
+### Memory Growing Continuously
+
+**Symptoms**
+- Worker memory usage increasing
+- OOM errors after running hours
+- Performance degradation over time
+
+**Identify Memory Leaks**
+
+```typescript
+// ❌ Problem: Unbounded cache growth
+const cache = new Map();
+cache.set(key, largeObject); // Never cleared
+
+// ✅ Solution: LRU eviction
+const cache = new Map();
+const MAX_CACHE_SIZE = 1000;
+
+function cacheSet(key: string, value: any) {
+  if (cache.size >= MAX_CACHE_SIZE) {
+    // Remove oldest entry
+    const firstKey = cache.keys().next().value;
+    cache.delete(firstKey);
+  }
+  cache.set(key, value);
+}
+
+// ❌ Problem: Growing arrays
+let contexts = [];
+contexts.push(newContext); // Keeps growing
+
+// ✅ Solution: Bounded array
+let contexts = [];
+const MAX_CONTEXTS = 100;
+
+if (contexts.length >= MAX_CONTEXTS) {
+  contexts.shift(); // Remove oldest
+}
+contexts.push(newContext);
+```
+
+**Check KV Usage**
+
+```bash
+# Monitor KV storage growth
+wrangler kv:key list --namespace-id YOUR_ID | wc -l
+
+# Clear old cache entries
+wrangler kv:key delete "episode:*" --namespace-id YOUR_ID
+```
+
+---
+
+## Deployment Issues
+
+### Deploy Fails with "Timeout"
+
+**Symptoms**
+- Deployment never completes
+- "Build exceeded time limit"
+- Random deployment failures
+
+**Solutions**
+
+```bash
+# ❌ Problem: Building entire codebase every time
+wrangler deploy --env production
+
+# ✅ Solution: Deploy only changed files
+# Wrangler handles this automatically, but ensure:
+# 1. .gitignore includes build artifacts
+# 2. No large files in src/
+# 3. Dependencies are minimal
+
+# Reduce build time
+npm prune --production # Remove dev dependencies
+wrangler deploy --minify # Minify code
+```
+
+### Metrics Not Showing
+
+**Symptoms**
+- No request metrics in D1
+- Analytics dashboard empty
+- Can't see performance trends
+
+**Enable Metrics Collection**
+
+```typescript
+// Ensure metrics are recorded after each request
+async function recordMetrics(duration: number, success: boolean, env: Env) {
+  await env.DB.prepare(
+    `INSERT INTO metrics (id, p50_latency, p95_latency, p99_latency, success_rate, timestamp)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))`
+  )
+    .bind(
+      `metric_${Date.now()}`,
+      duration,
+      duration * 1.5, // Rough estimate
+      duration * 2,
+      success ? 1 : 0
+    )
+    .run();
+}
+```
+
+---
+
+## Frequently Asked Questions
+
+### Can HERMES handle my request volume?
+
+**Q**: Can HERMES Trinity handle 10,000 requests/minute?
+
+**A**: Yes, with optimization:
+- **Auto-scaling**: Workers scales to 1000+ instances
+- **Target**: 100-500 req/sec per instance = 6M-30M requests/day
+- **Latency**: P95 stays 1.5-2.5s even at scale
+- **Cost**: ~$3,700/month at 1M requests/day
+
+**To achieve scale:**
+```typescript
+// 1. Enable batching
+const batch = await processBatch(requests); // 40% faster
+
+// 2. Semantic caching
+const cached = await getCachedByMeaning(query); // 50% cache hits
+
+// 3. Load shedding
+if (systemLoad > 90%) {
+  return queueRequest(request); // Return 202, process async
+}
+```
+
+---
+
+### How long until autonomous learning kicks in?
+
+**Q**: How many requests until Unidad Dos improves performance?
+
+**A**: Depends on request patterns:
+- **Homogeneous requests** (similar queries): 50-100 requests (1-2 hours)
+- **Diverse requests**: 500+ requests (1-2 days)
+- **Visible improvement**: ~40% latency reduction after 1,000 requests
+
+**Track learning progress:**
+
+```typescript
+async function assessLearning(env: Env) {
+  const metrics = await env.DB.prepare(
+    `SELECT
+      COUNT(*) as total_requests,
+      COUNT(DISTINCT user_id) as unique_users,
+      (SELECT COUNT(*) FROM semantic_memory) as patterns_learned,
+      (SELECT COUNT(*) FROM procedures) as workflows_learned
+     FROM episodes
+     WHERE timestamp > datetime('now', '-7 days')`
+  ).first();
+
+  return {
+    readyForOptimization: metrics.total_requests > 100,
+    estimatedImprovement: "30-40% latency reduction",
+    nextOptimization: metrics.patterns_learned > 20 ? "Enable semantic cache" : "Gather more data",
+  };
+}
+```
+
+---
+
+### Should I use KAI fallback?
+
+**Q**: When should I fall back to KAI workflows?
+
+**A**: Use KAI when:
+- Conductor confidence < 0.65
+- Deterministic outcomes required
+- Complex multi-step workflows
+- Existing KAI workflows mature
+
+**Example:**
+
+```typescript
+if (routing.confidence < 0.65) {
+  // Low confidence → use proven workflow
+  return await callKAIWorkflow(request.topic, env);
+} else {
+  // High confidence → use HERMES
+  return await executeHermesAgents(routing, env);
+}
+```
+
+---
+
+### How do I debug routing decisions?
+
+**Q**: How do I see why a request went to a specific agent?
+
+**A**: Enable debug logging:
+
+```typescript
+// Add to conductor response
+const routing = await conductorAgent(request, env);
+console.log({
+  request: request.substring(0, 50),
+  decidedAgent: routing.agent,
+  confidence: routing.confidence,
+  reasoning: routing.task,
+  timestamp: new Date().toISOString(),
+});
+
+// Store in database for analysis
+await env.DB.prepare(
+  `INSERT INTO debug_log (request_text, decision, confidence, timestamp)
+   VALUES (?, ?, ?, datetime('now'))`
+).bind(request.substring(0, 200), routing.agent, routing.confidence).run();
+```
+
+---
+
+### What's the learning curve?
+
+**Q**: How long does it take to see ROI?
+
+**A**: Typical timeline:
+- **Week 1**: System operational, baseline metrics
+- **Week 2-3**: First patterns extracted, minor improvements
+- **Week 4**: ~20-30% improvement visible
+- **Month 2**: ~40-50% total improvement
+- **Month 3+**: Plateau at 40-60% efficiency gain
+
+---
+
+## Performance Tuning Checklist
+
+<Details>
+<summary>Pre-Production Performance Optimization</summary>
+
+- [ ] **Database Indexes**: Create all 6 essential indexes
+- [ ] **KV Caching**: Enable 1-hour pattern cache, 24-hour workflow cache
+- [ ] **Conductor Tuning**: Improve system prompt with examples
+- [ ] **Token Budget**: Set max_tokens based on use case
+- [ ] **Batch Size**: Configure for your request volume
+- [ ] **Monitoring**: Set alerts at key thresholds
+- [ ] **Load Testing**: Test at 2x expected peak load
+- [ ] **Rollback Plan**: Document version and configuration
+- [ ] **Disaster Recovery**: Test D1 restore procedure
+- [ ] **Documentation**: Update runbook with findings
+
+</Details>
+
+---
+
+## When to Escalate
+
+**Contact support if:**
+- P99 latency > 5 seconds consistently
+- Success rate < 95% for a full hour
+- D1 returning "database locked" errors
+- Memory growing > 100MB
+- Cost per request > $0.001
+
+**Provide:**
+- Reproduction steps
+- Error logs from wrangler tail
+- Approximate request volume
+- Configuration (max_tokens, batch_size, etc.)
+
+---
+
+See the [Production Operations guide](/workers-ai/models/hermes-trinity-production-ops/) for incident response procedures and the [Learning Path](/workers-ai/models/hermes-trinity-learning-path/) for optimization strategies.
