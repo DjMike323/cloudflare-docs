@@ -1,0 +1,630 @@
+---
+title: HERMES + KAI Hybrid System - Implementation Guide
+description: Build a production system combining HERMES Trinity autonomous routing with KAI workflow structure
+pcx_content_type: implementation-guide
+difficulty: Advanced
+sidebar:
+  order: 12
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+This guide shows how to build a hybrid system that combines HERMES Trinity's autonomous intelligence with KAI's proven workflow structure.
+
+## Architecture: The Best of Both Worlds
+
+```
+┌─────────────────────────────────────────────┐
+│         User Request                        │
+└────────────────┬────────────────────────────┘
+                 │
+        ┌────────▼────────┐
+        │ HERMES Conductor│  ← Makes intelligent decisions
+        └────────┬────────┘
+                 │
+         ┌───────┴──────────┬─────────┐
+         │                  │         │
+    ┌────▼───┐         ┌────▼──┐  ┌──▼──┐
+    │ Confidence > 0.8?  │ Yes  │  │ No  │
+    └────────┘          └────┬──┘  └──┬──┘
+                              │       │
+                    ┌─────────▼─┐  ┌──▼─────────┐
+                    │ HERMES    │  │ KAI        │
+                    │ Workers   │  │ Workflow   │
+                    │ Execute   │  │ Execute    │
+                    └─────────┬─┘  └──┬─────────┘
+                              │       │
+                    ┌─────────▼───────▼─┐
+                    │ Learn & Store     │
+                    │ (Memory Unidad 2) │
+                    └───────────────────┘
+```
+
+## Core Implementation
+
+### Step 1: Create the Hybrid Router
+
+```typescript
+import { Ai } from "@cloudflare/workers-types";
+
+interface HybridRequest {
+  userId: string;
+  request: string;
+  requestType: "deterministic" | "adaptive" | "auto";
+}
+
+interface RoutingDecision {
+  system: "hermes" | "kai";
+  confidence: number;
+  reasoning: string;
+  parameters: Record<string, unknown>;
+}
+
+export async function hybridRouter(
+  req: HybridRequest,
+  env: Env
+): Promise<RoutingDecision> {
+  // Request type explicitly set
+  if (req.requestType !== "auto") {
+    return {
+      system: req.requestType === "deterministic" ? "kai" : "hermes",
+      confidence: 0.95,
+      reasoning: "Explicitly requested system",
+      parameters: {},
+    };
+  }
+
+  // Auto-route: Let HERMES Conductor decide
+  const conductorResponse = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `You are a router deciding between two systems:
+- HERMES: Adaptive, learns patterns, best for novel requests
+- KAI: Deterministic workflows, best for known processes
+
+Analyze the request and decide which system to use.
+Respond with JSON.`,
+        },
+        {
+          role: "user",
+          content: `Route this request: "${req.request}"
+          
+User has made ${await getHistoryCount(req.userId, env)} previous requests.`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          type: "object",
+          properties: {
+            system: { type: "string", enum: ["hermes", "kai"] },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            reasoning: { type: "string" },
+          },
+          required: ["system", "confidence", "reasoning"],
+        },
+      },
+      temperature: 0.3,
+    }
+  );
+
+  return JSON.parse(conductorResponse.response);
+}
+```
+
+### Step 2: HERMES Execution Path
+
+```typescript
+export async function executeHermes(
+  request: string,
+  userId: string,
+  env: Env
+): Promise<HermesResult> {
+  // Retrieve context from memory (Unidad Dos)
+  const context = await retrieveContext(userId, env);
+
+  const response = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        {
+          role: "system",
+          content: `You are HERMES Trinity. You have learned from ${context.episodicMemory.length} past interactions.
+
+Past successful patterns:
+${context.semanticMemory.slice(0, 3).map((p) => `- ${p.pattern}`).join("\n")}
+
+Apply this knowledge to respond better than before.`,
+        },
+        ...context.conversationHistory,
+        { role: "user", content: request },
+      ],
+      temperature: 0.6,
+      max_tokens: 2048,
+    }
+  );
+
+  const result = {
+    system: "hermes" as const,
+    response: response.response,
+    confidence: 0.9,
+    executionTime: Date.now(),
+  };
+
+  // Store in memory for future learning
+  await storeExperience(
+    {
+      userId,
+      request,
+      system: "hermes",
+      result: result.response,
+      success: true,
+      timestamp: new Date(),
+    },
+    env
+  );
+
+  return result;
+}
+```
+
+### Step 3: KAI Execution Path
+
+```typescript
+export async function executeKAI(
+  workflowId: string,
+  request: string,
+  userId: string,
+  env: Env
+): Promise<KAIResult> {
+  // KAI workflows are deterministic sequences
+  const workflow = await getKAIWorkflow(workflowId, env);
+
+  let result = request;
+  const executionSteps: ExecutionStep[] = [];
+
+  for (const step of workflow.steps) {
+    const stepStart = Date.now();
+
+    // Each step is a defined task
+    const stepResult = await executeKAIStep(step, result, env);
+
+    executionSteps.push({
+      stepId: step.id,
+      input: result,
+      output: stepResult,
+      duration: Date.now() - stepStart,
+      success: true,
+    });
+
+    result = stepResult;
+  }
+
+  // Update KAI workflow metrics
+  await updateWorkflowMetrics(workflowId, executionSteps, env);
+
+  return {
+    system: "kai" as const,
+    response: result,
+    workflow: workflowId,
+    steps: executionSteps,
+    executionTime: executionSteps.reduce((acc, s) => acc + s.duration, 0),
+  };
+}
+
+async function executeKAIStep(
+  step: WorkflowStep,
+  input: string,
+  env: Env
+): Promise<string> {
+  // Call to n8n webhook for this step
+  const response = await fetch(step.webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input, stepId: step.id }),
+  });
+
+  return await response.text();
+}
+```
+
+### Step 4: Hybrid Orchestration
+
+```typescript
+export async function hybridOrchestrate(
+  req: HybridRequest,
+  env: Env
+): Promise<HybridResponse> {
+  // Step 1: Decide which system
+  const routing = await hybridRouter(req, env);
+
+  let result;
+  let executionMetrics;
+
+  if (routing.system === "hermes") {
+    // Execute HERMES
+    const hermes = await executeHermes(req.request, req.userId, env);
+    result = hermes.response;
+    executionMetrics = {
+      system: "hermes",
+      confidence: routing.confidence,
+      executionTime: hermes.executionTime,
+      learnedFrom: hermes.learnedFrom || 0,
+    };
+  } else {
+    // Execute KAI
+    const workflowId = routing.parameters.workflowId as string;
+    const kai = await executeKAI(workflowId, req.request, req.userId, env);
+    result = kai.response;
+    executionMetrics = {
+      system: "kai",
+      confidence: routing.confidence,
+      executionTime: kai.executionTime,
+      workflow: kai.workflow,
+      stepCount: kai.steps.length,
+    };
+  }
+
+  // Step 5: Quality Gate - Validate result
+  const quality = await validateResult(result, env);
+
+  return {
+    result,
+    routing: {
+      system: routing.system,
+      confidence: routing.confidence,
+      reasoning: routing.reasoning,
+    },
+    metrics: executionMetrics,
+    quality: quality.score,
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+## Integration Patterns
+
+### Pattern 1: Adaptive Workflow Selection
+
+```typescript
+async function adaptiveWorkflowSelection(
+  request: string,
+  userId: string,
+  env: Env
+): Promise<string> {
+  // Get HERMES plan
+  const hermesPlan = await conductorAgent(request, env);
+
+  if (hermesPlan.confidence < 0.7) {
+    // Low confidence → find matching KAI workflow
+    const workflow = await findMatchingWorkflow(hermesPlan.intent, env);
+
+    if (workflow) {
+      // Use proven KAI workflow
+      return await executeKAI(workflow.id, request, userId, env);
+    }
+  }
+
+  // High confidence → use HERMES
+  return await executeHermes(request, userId, env);
+}
+```
+
+### Pattern 2: Validation via Dual Execution
+
+```typescript
+async function validateWithBothSystems(
+  request: string,
+  userId: string,
+  env: Env
+): Promise<{ primary: string; validated: boolean; backup: string }> {
+  // Primary: HERMES (faster)
+  const hermes = await executeHermes(request, userId, env);
+
+  // Validate with KAI if available
+  const matchingWorkflow = await findMatchingWorkflow(request, env);
+
+  if (matchingWorkflow) {
+    const kai = await executeKAI(matchingWorkflow.id, request, userId, env);
+
+    // Compare quality
+    const hermesQuality = await assessQuality(hermes.response);
+    const kaiQuality = await assessQuality(kai.response);
+
+    return {
+      primary: hermes.response,
+      validated: hermesQuality.score >= kaiQuality.score * 0.9,
+      backup: kai.response,
+    };
+  }
+
+  return {
+    primary: hermes.response,
+    validated: true,
+    backup: "",
+  };
+}
+```
+
+### Pattern 3: Progressive Learning
+
+```typescript
+async function progressiveLearning(
+  request: string,
+  userId: string,
+  env: Env
+): Promise<ProgressiveResult> {
+  const round1 = await executeHermes(request, userId, env);
+
+  // After first execution, check if KAI has workflow for this
+  const matchingWorkflow = await findMatchingWorkflow(request, env);
+
+  if (!matchingWorkflow) {
+    // Suggest creating KAI workflow from this pattern
+    await suggestWorkflowCreation(
+      {
+        pattern: request,
+        hermesSolution: round1.response,
+        successRate: 0.9,
+      },
+      env
+    );
+  } else {
+    // Next time, prefer KAI (faster, proven)
+    await recordLearnedPattern(request, "kai", matchingWorkflow.id, env);
+  }
+
+  return {
+    response: round1.response,
+    learned: matchingWorkflow ? false : true,
+    suggestedWorkflow: matchingWorkflow?.id,
+  };
+}
+```
+
+## Memory Integration
+
+Both systems share the same memory layer (Unidad Dos):
+
+```typescript
+async function storeHybridExperience(
+  request: string,
+  system: "hermes" | "kai",
+  result: string,
+  quality: number,
+  env: Env
+): Promise<void> {
+  // Layer 1: Episodic - What happened
+  await env.DB.prepare(
+    `INSERT INTO episodes (
+      request, system_used, result_quality, timestamp
+    ) VALUES (?, ?, ?, NOW())`
+  ).bind(request, system, quality).run();
+
+  // Layer 2: Semantic - Learn the pattern
+  if (quality > 0.85) {
+    const pattern = await extractPattern(request);
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO semantic_memory (
+        pattern, system_preference, confidence
+      ) VALUES (?, ?, ?)`
+    ).bind(pattern, system, Math.min(quality, 1.0)).run();
+  }
+
+  // Layer 3: Procedural - If KAI workflow, track performance
+  if (system === "kai") {
+    await env.DB.prepare(
+      `UPDATE kai_workflows SET
+       success_rate = (success_rate * runs + ?) / (runs + 1),
+       runs = runs + 1
+       WHERE id = ?`
+    ).bind(quality, request).run();
+  }
+}
+```
+
+## Deployment Configuration
+
+### Environment Variables
+
+```bash
+# HERMES Configuration
+HERMES_MODEL=@hf/nousresearch/hermes-2-pro-mistral-7b
+HERMES_TEMPERATURE=0.3
+HERMES_CONFIDENCE_THRESHOLD=0.7
+
+# KAI Configuration
+KAI_N8N_BASE_URL=https://n8n.yourdomain.com
+KAI_N8N_API_KEY=your_n8n_api_key
+
+# Hybrid Configuration
+HYBRID_MODE=adaptive  # auto, hermes_first, kai_first, parallel
+HYBRID_LEARNING_ENABLED=true
+```
+
+### Cloudflare D1 Schema
+
+```sql
+-- Hybrid execution tracking
+CREATE TABLE hybrid_executions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  request TEXT NOT NULL,
+  routing_decision TEXT CHECK(routing_decision IN ('hermes', 'kai')),
+  routing_confidence REAL,
+  system_used TEXT CHECK(system_used IN ('hermes', 'kai')),
+  result TEXT,
+  quality_score REAL,
+  execution_time_ms INTEGER,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_hybrid_user ON hybrid_executions(user_id);
+CREATE INDEX idx_hybrid_system ON hybrid_executions(system_used);
+```
+
+## Testing the Hybrid System
+
+<Tabs>
+<TabItem label="Unit Tests">
+
+```typescript
+import { describe, it, expect } from "vitest";
+
+describe("Hybrid HERMES + KAI System", () => {
+  it("routes high-confidence requests to HERMES", async () => {
+    const decision = await hybridRouter(
+      {
+        userId: "test_user",
+        request: "Something completely new and creative",
+        requestType: "auto",
+      },
+      mockEnv
+    );
+
+    expect(decision.system).toBe("hermes");
+    expect(decision.confidence).toBeGreaterThan(0.7);
+  });
+
+  it("routes familiar patterns to KAI", async () => {
+    // Setup: Store familiar pattern
+    await storePattern("content_pipeline", mockEnv);
+
+    const decision = await hybridRouter(
+      {
+        userId: "test_user",
+        request: "content_pipeline",
+        requestType: "auto",
+      },
+      mockEnv
+    );
+
+    expect(decision.system).toBe("kai");
+  });
+
+  it("validates results quality across both systems", async () => {
+    const result = await validateWithBothSystems(
+      "test request",
+      "user_123",
+      mockEnv
+    );
+
+    expect(result.validated).toBeDefined();
+    expect(result.backup).toBeTruthy();
+  });
+});
+```
+
+</TabItem>
+<TabItem label="Integration Test">
+
+```typescript
+it("completes hybrid workflow end-to-end", async () => {
+  const response = await hybridOrchestrate(
+    {
+      userId: "integration_test",
+      request: "Write a blog post about AI",
+      requestType: "auto",
+    },
+    env
+  );
+
+  expect(response.result).toBeTruthy();
+  expect(response.routing.system).toMatch(/hermes|kai/);
+  expect(response.metrics.executionTime).toBeGreaterThan(0);
+  expect(response.quality).toBeGreaterThan(0.5);
+
+  // Verify memory was updated
+  const stored = await env.DB.prepare(
+    `SELECT * FROM hybrid_executions WHERE id = ?`
+  ).bind(response.timestamp).first();
+
+  expect(stored).toBeTruthy();
+});
+```
+
+</TabItem>
+</Tabs>
+
+## Monitoring & Metrics
+
+Track system performance:
+
+```typescript
+async function getHybridMetrics(env: Env): Promise<HybridMetrics> {
+  const metrics = await env.DB.prepare(
+    `SELECT
+      system_used,
+      COUNT(*) as executions,
+      AVG(quality_score) as avg_quality,
+      AVG(execution_time_ms) as avg_latency,
+      AVG(CASE WHEN quality_score >= 0.85 THEN 1 ELSE 0 END) as success_rate
+    FROM hybrid_executions
+    WHERE timestamp > datetime('now', '-7 days')
+    GROUP BY system_used`
+  ).all();
+
+  return {
+    hermes: metrics.results.find((r) => r.system_used === "hermes") || null,
+    kai: metrics.results.find((r) => r.system_used === "kai") || null,
+  };
+}
+```
+
+<Details>
+<summary>Advanced: Multi-Model Routing</summary>
+
+For even more sophisticated routing, combine multiple LLMs:
+
+```typescript
+async function multiModelRouting(request: string, env: Env): Promise<string> {
+  // Get HERMES opinion
+  const hermesVote = await env.AI.run(
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    { /* ... */ }
+  );
+
+  // Get another model's opinion
+  const mistralVote = await env.AI.run("@hf/mistralai/mistral-7b-instruct-v0.2", {
+    /* ... */
+  });
+
+  // Ensemble voting
+  if (
+    hermesVote.recommendedSystem === mistralVote.recommendedSystem &&
+    hermesVote.confidence > 0.75
+  ) {
+    return hermesVote.recommendedSystem;
+  }
+
+  // Default to HERMES if disagreement
+  return "hermes";
+}
+```
+
+</Details>
+
+## Next Steps
+
+1. **Deploy the hybrid system** to production
+2. **Monitor which system wins** for different request types
+3. **Gradually build KAI workflows** from high-frequency patterns HERMES learns
+4. **Optimize routing** based on real-world metrics
+5. **Set up automated workflow creation** when patterns repeat
+
+This hybrid approach gives you HERMES's autonomy with KAI's reliability—the best of both worlds.
+
+---
+
+## See Also
+
+- [HERMES Trinity Architecture](/workers-ai/models/hermes-trinity-architecture/)
+- [HERMES Trinity Memory System](/workers-ai/models/hermes-trinity-memory-system/)
+- [HERMES and KAI Integration Guide](/workers-ai/models/hermes-kai-integration-guide/)
+- [Cloudflare Workers AI Documentation](/workers-ai/)
