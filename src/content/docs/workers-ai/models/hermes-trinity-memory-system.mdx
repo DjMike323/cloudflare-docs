@@ -1,0 +1,562 @@
+---
+title: HERMES Trinity Memory System (Unidad Dos)
+description: Distributed memory architecture for autonomous learning and context preservation in HERMES Trinity
+pcx_content_type: reference-architecture
+difficulty: Advanced
+sidebar:
+  order: 10
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+The HERMES Trinity memory system—Unidad Dos—is the intelligent backbone that enables autonomous learning and continuous improvement. While the Conductor (Unidad Uno) makes routing decisions, Unidad Dos remembers those decisions, learns from outcomes, and optimizes future execution.
+
+## System Architecture
+
+HERMES Trinity operates as three coordinated units:
+
+```
+┌──────────────────────────────────┐
+│   UNIDAD UNO: Conductor          │
+│   ├─ Routes requests             │
+│   ├─ Selects agents              │
+│   └─ Makes autonomous decisions  │
+│           ↓↑                      │
+│   UNIDAD DOS: Memory             │
+│   ├─ Stores decisions            │
+│   ├─ Learns from results         │
+│   ├─ Optimizes routing           │
+│   └─ Maintains 24/7 context      │
+│           ↓↑                      │
+│   UNIDAD TRES: Workers           │
+│   ├─ Executes tasks              │
+│   ├─ Validates quality           │
+│   ├─ Reports results             │
+│   └─ Adapts to feedback          │
+└──────────────────────────────────┘
+```
+
+## Four-Layer Memory Architecture
+
+Unidad Dos implements a distributed memory system across four layers, each optimized for specific use cases:
+
+### Layer 1: Episodic Memory (What Happened)
+
+**Storage**: Cloudflare D1  
+**Retention**: 30 days (configurable)  
+**Record size**: 50-200 KB per event
+
+Stores every interaction: requests, conductor decisions, agent executions, results, and user feedback.
+
+```sql
+CREATE TABLE episodes (
+  id TEXT PRIMARY KEY,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  user_id TEXT NOT NULL,
+  request_text TEXT NOT NULL,
+  conductor_decision JSON NOT NULL,
+  agents_executed TEXT[] NOT NULL,
+  result TEXT,
+  success BOOLEAN,
+  user_rating INTEGER,
+  cost_tokens INTEGER,
+  latency_ms INTEGER,
+  feedback_text TEXT
+);
+
+CREATE INDEX idx_episodes_user ON episodes(user_id);
+CREATE INDEX idx_episodes_timestamp ON episodes(timestamp);
+```
+
+**Example entry**:
+```json
+{
+  "id": "ep_2026_10_06_001",
+  "user_id": "user_123",
+  "request_text": "Write a blog post about AI automation",
+  "conductor_decision": {
+    "agent": "writer",
+    "confidence": 0.92,
+    "reasoning": "Matches content creation pattern"
+  },
+  "agents_executed": ["writer", "editor"],
+  "result": "Comprehensive 2000-word blog post",
+  "success": true,
+  "user_rating": 5,
+  "cost_tokens": 3200,
+  "latency_ms": 4500
+}
+```
+
+### Layer 2: Semantic Memory (What We Know)
+
+**Storage**: D1 + vector embeddings  
+**Retention**: Indefinite  
+**Update frequency**: Per learning cycle
+
+Stores facts, rules, and learned patterns. Includes embeddings for semantic search.
+
+```sql
+CREATE TABLE semantic_memory (
+  id TEXT PRIMARY KEY,
+  concept TEXT NOT NULL UNIQUE,
+  definition TEXT NOT NULL,
+  embedding FLOAT[] NOT NULL,
+  confidence FLOAT DEFAULT 0.7,
+  source TEXT,
+  related_concepts TEXT[] DEFAULT [],
+  last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_concepts ON semantic_memory(concept);
+```
+
+**Example facts**:
+```json
+[
+  {
+    "concept": "Content Pipeline",
+    "definition": "Sequential execution: research → outline → write → edit → publish",
+    "confidence": 0.98,
+    "source": "trained"
+  },
+  {
+    "concept": "User Preference: Formal Tone",
+    "definition": "User_123 prefers academic writing style with citations",
+    "confidence": 0.85,
+    "source": "learned_from_feedback"
+  }
+]
+```
+
+### Layer 3: Procedural Memory (What Works)
+
+**Storage**: D1 + Workers KV cache  
+**Retention**: Indefinite  
+**Hit rate**: 40-60% for repeat patterns
+
+Stores successful workflows and optimization patterns.
+
+```sql
+CREATE TABLE procedures (
+  id TEXT PRIMARY KEY,
+  workflow_name TEXT NOT NULL,
+  steps JSON NOT NULL,
+  success_rate FLOAT,
+  avg_cost_tokens INTEGER,
+  avg_latency_ms INTEGER,
+  applicable_contexts TEXT[],
+  variations TEXT[],
+  created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_used DATETIME,
+  usage_count INTEGER DEFAULT 0
+);
+```
+
+**Example workflow**:
+```json
+{
+  "workflow_name": "content_research_to_publish",
+  "steps": [
+    {
+      "agent": "analyst",
+      "task": "Research topic",
+      "timeout_ms": 8000
+    },
+    {
+      "agent": "writer",
+      "task": "Create draft",
+      "timeout_ms": 5000
+    },
+    {
+      "agent": "editor",
+      "task": "Polish content",
+      "timeout_ms": 3000
+    }
+  ],
+  "success_rate": 0.94,
+  "avg_cost_tokens": 3200,
+  "avg_latency_ms": 4500,
+  "applicable_contexts": ["blog_post", "tutorial", "guide"],
+  "usage_count": 127
+}
+```
+
+### Layer 4: Task State (In-Progress Work)
+
+**Storage**: Workers KV (high-speed)  
+**Retention**: 24 hours  
+**Access pattern**: Frequent reads/writes
+
+Maintains state for long-running durable workflows with automatic recovery.
+
+```typescript
+interface TaskState {
+  taskId: string;
+  status: "running" | "paused" | "checkpoint" | "completed" | "failed";
+  progress: {
+    currentStep: number;
+    totalSteps: number;
+    completedSteps: string[];
+    results: Record<string, unknown>;
+  };
+  context: Record<string, unknown>;
+  nextStep: string;
+  estimatedCompletion: Date;
+  checkpoints: Array<{
+    stepId: string;
+    timestamp: Date;
+    state: Record<string, unknown>;
+  }>;
+}
+```
+
+**Example task state**:
+```json
+{
+  "taskId": "task_analysis_2026_10_06",
+  "status": "running",
+  "progress": {
+    "currentStep": 2,
+    "totalSteps": 4,
+    "completedSteps": ["research", "outline"],
+    "results": {
+      "research": "Found 45 relevant sources",
+      "outline": "5-section structure created"
+    }
+  },
+  "nextStep": "write_draft",
+  "estimatedCompletion": "2026-10-06T15:30:00Z",
+  "checkpoints": [
+    {
+      "stepId": "research",
+      "timestamp": "2026-10-06T14:05:00Z",
+      "state": { "sources_found": 45 }
+    }
+  ]
+}
+```
+
+## Complete Learning Cycle
+
+The learning cycle runs automatically after each request:
+
+```
+1. Request arrives
+   ↓
+2. Conductor analyzes context (retrieves Layers 1-4)
+   ↓
+3. Conductor decides routing
+   ↓
+4. Agents execute
+   ↓
+5. Store episode (Layer 1)
+   ↓
+6. Extract semantic patterns (Layer 2)
+   ↓
+7. Evaluate workflow success (Layer 3)
+   ↓
+8. Save task checkpoint (Layer 4)
+   ↓
+9. Next request 40% faster, 20% cheaper
+```
+
+### Metrics After Learning
+
+- **Speed improvement**: 40% latency reduction on repeat patterns
+- **Cost reduction**: 20% token efficiency gain
+- **Accuracy**: +15-25% higher confidence scores
+- **Autonomy**: Agent selection becomes more precise
+
+## Key Operations
+
+### Storing Experience
+
+```typescript
+async function storeExperience(
+  episode: Episode,
+  env: Env
+): Promise<void> {
+  // Layer 1: Store raw episode
+  await env.DB.prepare(
+    `INSERT INTO episodes (
+      id, user_id, request_text, conductor_decision,
+      agents_executed, result, success, user_rating,
+      cost_tokens, latency_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    episode.id,
+    episode.userId,
+    episode.request,
+    JSON.stringify(episode.decision),
+    JSON.stringify(episode.agents),
+    episode.result,
+    episode.success,
+    episode.userRating,
+    episode.costTokens,
+    episode.latencyMs
+  ).run();
+
+  // Layer 2: Extract semantic patterns (async)
+  if (episode.success && episode.userRating >= 4) {
+    await extractSemanticPatterns(episode, env);
+  }
+
+  // Layer 3: Update procedural memory
+  await updateProcedureMetrics(episode, env);
+
+  // Layer 4: Clear task state (task completed)
+  if (episode.taskId) {
+    await env.KV.delete(`task:${episode.taskId}`);
+  }
+}
+```
+
+### Retrieving Context
+
+```typescript
+async function retrieveContext(
+  userId: string,
+  currentRequest: string,
+  env: Env
+): Promise<ConductorContext> {
+  // Layer 1: Recent episodes
+  const episodes = await env.DB.prepare(
+    `SELECT * FROM episodes
+     WHERE user_id = ? AND timestamp > datetime('now', '-7 days')
+     ORDER BY timestamp DESC LIMIT 20`
+  ).bind(userId).all();
+
+  // Layer 2: Semantic patterns
+  const semanticPatterns = await env.DB.prepare(
+    `SELECT * FROM semantic_memory
+     WHERE user_id = ? OR source = 'verified'
+     ORDER BY confidence DESC`
+  ).bind(userId).all();
+
+  // Layer 3: Applicable workflows
+  const workflows = await env.DB.prepare(
+    `SELECT * FROM procedures
+     WHERE applicable_contexts && ?
+     ORDER BY success_rate DESC`
+  ).bind(JSON.stringify(extractContexts(currentRequest))).all();
+
+  // Layer 4: In-progress tasks
+  const activeTask = await env.KV.get(`task:${userId}`, "json");
+
+  return {
+    episodes: episodes.results,
+    semanticPatterns: semanticPatterns.results,
+    workflows: workflows.results,
+    activeTask,
+    userPreferences: extractPreferences(episodes.results),
+  };
+}
+```
+
+### Learning from Feedback
+
+```typescript
+async function learnFromFeedback(
+  episodeId: string,
+  rating: number,
+  feedback: string,
+  env: Env
+): Promise<void> {
+  // Update confidence based on user rating
+  const episode = await env.DB.prepare(
+    `SELECT * FROM episodes WHERE id = ?`
+  ).bind(episodeId).first();
+
+  // Adjust agent confidence
+  const oldConfidence = episode.conductor_decision.confidence;
+  const newConfidence = oldConfidence + (rating > 3 ? 0.05 : -0.1);
+
+  // Update semantic memory
+  await env.DB.prepare(
+    `UPDATE semantic_memory
+     SET confidence = confidence + ?
+     WHERE concept = ?`
+  ).bind(
+    rating > 3 ? 0.02 : -0.05,
+    episode.conductor_decision.agent
+  ).run();
+
+  // Update episode record
+  await env.DB.prepare(
+    `UPDATE episodes
+     SET user_rating = ?, feedback_text = ?
+     WHERE id = ?`
+  ).bind(rating, feedback, episodeId).run();
+}
+```
+
+## Security Considerations
+
+**Never store in memory:**
+- Passwords, tokens, or API keys
+- Personally identifiable information (PII)
+- Financial data or payment information
+- Health or sensitive personal data
+
+**Safe to store:**
+- Generic user preferences (tone, style, format)
+- Routing decisions and agent selections
+- Task outcomes (without sensitive content)
+- Performance metrics and timestamps
+
+**Example safe pattern**:
+```typescript
+// ✅ SAFE: Store generic preferences
+{
+  "concept": "user_style_preference",
+  "value": "prefers_concise_format"
+}
+
+// ❌ UNSAFE: Don't store personal details
+{
+  "user_email": "user@example.com",
+  "phone": "+1-555-0123"
+}
+
+// ✅ SAFE: Store routing decisions
+{
+  "routing_pattern": "content_requests_→_writer_agent",
+  "success_rate": 0.92
+}
+```
+
+## Performance Optimizations
+
+### Intelligent Caching
+
+```typescript
+// Cache frequently-used patterns in Workers KV
+async function cacheWorkflow(
+  workflow: Procedure,
+  env: Env
+): Promise<void> {
+  if (workflow.success_rate > 0.90 && workflow.usage_count > 10) {
+    await env.KV.put(
+      `workflow:${workflow.id}`,
+      JSON.stringify(workflow),
+      { expirationTtl: 86400 } // 24 hours
+    );
+  }
+}
+```
+
+### Lazy Vectorization
+
+```typescript
+// Only embed semantic patterns when accessed
+async function ensureEmbedding(
+  concept: string,
+  env: Env
+): Promise<Float32Array> {
+  const cached = await env.KV.get(`embedding:${concept}`);
+  if (cached) return JSON.parse(cached);
+
+  const embedding = await env.AI.run("@hf/sentence-transformers/all-minilm-l6-v2", {
+    texts: [concept],
+  });
+
+  await env.KV.put(`embedding:${concept}`, JSON.stringify(embedding));
+  return embedding;
+}
+```
+
+### Batch Updates
+
+```typescript
+// Reduce database calls by batching updates
+async function batchUpdateProcedures(
+  episodes: Episode[],
+  env: Env
+): Promise<void> {
+  const updates = episodes
+    .filter(ep => ep.success)
+    .map(ep => ({
+      workflowId: ep.workflowId,
+      success: true,
+      costTokens: ep.costTokens,
+    }));
+
+  // Single batch insert instead of N individual updates
+  await env.DB.batch(
+    updates.map(update =>
+      env.DB.prepare(
+        `UPDATE procedures SET success_rate = success_rate + 0.01,
+         avg_cost_tokens = (avg_cost_tokens + ?) / 2
+         WHERE id = ?`
+      ).bind(update.costTokens, update.workflowId)
+    )
+  );
+}
+```
+
+## Monitoring Memory Health
+
+Key metrics to track:
+
+| Metric | Target | Alert Threshold |
+|--------|--------|-----------------|
+| **Episode store latency** | < 500ms | > 2s |
+| **Semantic pattern retrieval** | < 100ms | > 500ms |
+| **Procedural memory hit rate** | > 40% | < 20% |
+| **Task state freshness** | < 5s | > 60s |
+| **D1 database size** | < 5 GB | > 10 GB |
+
+<Details>
+<summary>Advanced: Distributed Memory Topology</summary>
+
+For high-scale deployments (>10K requests/day), consider:
+
+1. **Read replica for Layer 1**: Separate D1 instance for episode retrieval
+2. **Cache warmup**: Pre-load high-confidence procedures into Workers KV
+3. **Async semantic indexing**: Vectorize patterns without blocking responses
+4. **Regional distribution**: Partition episodes by geography or tenant
+5. **Archive older episodes**: Move episodes > 90 days to cold storage
+
+```typescript
+async function archiveOldEpisodes(env: Env): Promise<void> {
+  const archived = await env.DB.prepare(
+    `SELECT * FROM episodes
+     WHERE timestamp < datetime('now', '-90 days')`
+  ).all();
+
+  // Move to R2 for cold storage
+  for (const episode of archived.results) {
+    await env.R2.put(
+      `episodes/${episode.id}.json`,
+      JSON.stringify(episode)
+    );
+  }
+
+  // Delete from hot database
+  await env.DB.prepare(
+    `DELETE FROM episodes
+     WHERE timestamp < datetime('now', '-90 days')`
+  ).run();
+}
+```
+
+</Details>
+
+## Next Steps
+
+1. **Implement Layer 1**: Set up D1 schema and episode logging
+2. **Add Layer 2**: Extract semantic patterns from high-rated episodes
+3. **Build Layer 3**: Track workflow success rates and costs
+4. **Enable Layer 4**: Implement durable task checkpointing
+5. **Monitor health**: Track memory performance metrics
+6. **Optimize costs**: Archive old episodes, cache workflows
+
+See also:
+- [HERMES Trinity Architecture](/workers-ai/models/hermes-trinity-architecture/)
+- [HERMES Trinity Quick Start](/workers-ai/models/hermes-trinity-quickstart/)
+- [Cloudflare D1 Documentation](/d1/)
+- [Workers KV Documentation](/workers/runtime-apis/web-crypto-api/)
