@@ -1,0 +1,594 @@
+---
+title: KAI Connector Marketplace
+description: Pre-built connectors for popular APIs, databases, and services
+pcx_content_type: reference
+difficulty: Intermediate
+sidebar:
+  order: 19
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Marketplace of pre-built connectors for KAI workflows. Use these to connect to external systems without writing custom code.
+
+## Available Connectors
+
+### HTTP / REST APIs
+
+**HTTP Connector**
+- GET, POST, PUT, DELETE, PATCH requests
+- Custom headers and authentication
+- JSON/form data support
+- Timeout and retry configuration
+
+```json
+{
+  "type": "http",
+  "action": "post",
+  "params": {
+    "url": "https://api.example.com/users",
+    "headers": { "X-API-Key": "your-key" },
+    "body": { "name": "John", "email": "john@example.com" }
+  }
+}
+```
+
+---
+
+### Communication
+
+**Slack**
+- Send messages to channels
+- Create channels
+- Update user status
+- Post blocks/rich messages
+
+```json
+{
+  "type": "slack",
+  "action": "send_message",
+  "params": {
+    "channel": "#alerts",
+    "text": "Critical alert: {{alert_type}}",
+    "blocks": [
+      {
+        "type": "section",
+        "text": { "type": "mrkdwn", "text": "*High Priority*\n{{alert_message}}" }
+      }
+    ]
+  }
+}
+```
+
+**Discord**
+- Send messages
+- Create/manage channels
+- Manage roles
+- React to messages
+
+```json
+{
+  "type": "discord",
+  "action": "send_message",
+  "params": {
+    "channel_id": "123456789",
+    "content": "Notification: {{event}}",
+    "embeds": [
+      {
+        "title": "Event",
+        "description": "{{event_details}}",
+        "color": 3447003
+      }
+    ]
+  }
+}
+```
+
+**Email (SMTP)**
+- Send emails
+- HTML templates
+- Attachments
+- Multiple recipients
+
+```json
+{
+  "type": "email",
+  "action": "send",
+  "params": {
+    "to": "user@example.com",
+    "subject": "Welcome {{name}}",
+    "html": "<h1>Hello {{name}}</h1>",
+    "attachments": [
+      { "filename": "invoice.pdf", "path": "s3://bucket/invoice.pdf" }
+    ]
+  }
+}
+```
+
+**SMS (Twilio)**
+- Send SMS messages
+- Send WhatsApp messages
+- Two-way messaging
+- Phone number validation
+
+```json
+{
+  "type": "sms",
+  "action": "send",
+  "params": {
+    "to": "+1234567890",
+    "message": "Your code is: {{verification_code}}"
+  }
+}
+```
+
+---
+
+### Databases
+
+**PostgreSQL / MySQL**
+- Query data
+- Insert/update/delete
+- Transactions
+- Connection pooling
+
+```json
+{
+  "type": "database",
+  "action": "query",
+  "params": {
+    "database": "postgres",
+    "query": "SELECT * FROM users WHERE email = $1",
+    "params": ["{{user_email}}"]
+  }
+}
+```
+
+**MongoDB**
+- Find documents
+- Insert/update/delete
+- Aggregation pipeline
+- Bulk operations
+
+```json
+{
+  "type": "mongodb",
+  "action": "find",
+  "params": {
+    "collection": "users",
+    "filter": { "status": "active" },
+    "limit": 10
+  }
+}
+```
+
+**Firebase/Firestore**
+- Read/write documents
+- Batch operations
+- Queries
+- Real-time listeners
+
+```json
+{
+  "type": "firestore",
+  "action": "set",
+  "params": {
+    "collection": "users",
+    "doc": "{{user_id}}",
+    "data": { "name": "{{name}}", "updated_at": "now()" }
+  }
+}
+```
+
+---
+
+### Cloud Storage
+
+**AWS S3**
+- Upload/download files
+- List objects
+- Delete objects
+- Generate signed URLs
+
+```json
+{
+  "type": "s3",
+  "action": "put_object",
+  "params": {
+    "bucket": "my-bucket",
+    "key": "uploads/{{filename}}",
+    "body": "{{file_content}}",
+    "contentType": "application/pdf"
+  }
+}
+```
+
+**Cloudflare R2**
+- Same as S3 API
+- No egress fees
+- Native Cloudflare integration
+
+```json
+{
+  "type": "r2",
+  "action": "put_object",
+  "params": {
+    "bucket": "my-bucket",
+    "key": "data/{{key}}.json",
+    "body": "{{json_data}}"
+  }
+}
+```
+
+**Google Cloud Storage**
+- Upload/download
+- Lifecycle management
+- Public/private access
+
+```json
+{
+  "type": "gcs",
+  "action": "upload",
+  "params": {
+    "bucket": "my-bucket",
+    "filename": "files/{{filename}}",
+    "data": "{{file_data}}"
+  }
+}
+```
+
+---
+
+### Payment Processing
+
+**Stripe**
+- Create charges
+- Create customers
+- Create subscriptions
+- Handle webhooks
+
+```json
+{
+  "type": "stripe",
+  "action": "create_charge",
+  "params": {
+    "amount": 2000,
+    "currency": "usd",
+    "source": "{{card_token}}",
+    "description": "Order #{{order_id}}"
+  }
+}
+```
+
+**PayPal**
+- Create transactions
+- Process refunds
+- Create invoices
+- Get transaction details
+
+```json
+{
+  "type": "paypal",
+  "action": "create_payment",
+  "params": {
+    "amount": "20.00",
+    "currency": "USD",
+    "description": "Product purchase"
+  }
+}
+```
+
+---
+
+### E-Commerce
+
+**Shopify**
+- Create/update products
+- Manage orders
+- List customers
+- Create fulfillments
+
+```json
+{
+  "type": "shopify",
+  "action": "create_order",
+  "params": {
+    "line_items": [
+      { "variant_id": "{{variant_id}}", "quantity": 1 }
+    ],
+    "customer": { "email": "{{email}}" }
+  }
+}
+```
+
+**WooCommerce**
+- Create products
+- Manage orders
+- Update customer data
+- Process refunds
+
+```json
+{
+  "type": "woocommerce",
+  "action": "create_product",
+  "params": {
+    "name": "{{product_name}}",
+    "price": "{{price}}",
+    "sku": "{{sku}}"
+  }
+}
+```
+
+---
+
+### CRM / Marketing
+
+**Salesforce**
+- Create records
+- Update leads
+- Create opportunities
+- Log activities
+
+```json
+{
+  "type": "salesforce",
+  "action": "create_lead",
+  "params": {
+    "FirstName": "{{first_name}}",
+    "LastName": "{{last_name}}",
+    "Email": "{{email}}",
+    "Company": "{{company}}"
+  }
+}
+```
+
+**HubSpot**
+- Create/update contacts
+- Create deals
+- Send emails
+- Manage lists
+
+```json
+{
+  "type": "hubspot",
+  "action": "create_contact",
+  "params": {
+    "email": "{{email}}",
+    "firstname": "{{first_name}}",
+    "lastname": "{{last_name}}"
+  }
+}
+```
+
+**Mailchimp**
+- Add subscribers
+- Send campaigns
+- Manage lists
+- Get reports
+
+```json
+{
+  "type": "mailchimp",
+  "action": "subscribe",
+  "params": {
+    "list_id": "{{list_id}}",
+    "email_address": "{{email}}",
+    "merge_fields": { "FNAME": "{{first_name}}" }
+  }
+}
+```
+
+---
+
+### Productivity Tools
+
+**Google Sheets**
+- Read/append data
+- Update cells
+- Create sheets
+- Format cells
+
+```json
+{
+  "type": "sheets",
+  "action": "append",
+  "params": {
+    "spreadsheet_id": "{{sheet_id}}",
+    "range": "Sheet1!A:C",
+    "values": [["{{col1}}", "{{col2}}", "{{col3}}"]]
+  }
+}
+```
+
+**Notion**
+- Create pages
+- Update databases
+- Query data
+- Add blocks
+
+```json
+{
+  "type": "notion",
+  "action": "create_page",
+  "params": {
+    "parent": { "database_id": "{{db_id}}" },
+    "properties": {
+      "Name": { "title": [{ "text": { "content": "{{name}}" } }] },
+      "Email": { "email": "{{email}}" }
+    }
+  }
+}
+```
+
+**Jira**
+- Create issues
+- Update issues
+- Add comments
+- Manage workflows
+
+```json
+{
+  "type": "jira",
+  "action": "create_issue",
+  "params": {
+    "project": "PROJ",
+    "summary": "{{issue_title}}",
+    "description": "{{issue_description}}",
+    "issuetype": "Bug"
+  }
+}
+```
+
+---
+
+### Analytics & Monitoring
+
+**Google Analytics**
+- Send events
+- Track conversions
+- Set user properties
+- Get reports
+
+```json
+{
+  "type": "analytics",
+  "action": "send_event",
+  "params": {
+    "measurement_id": "{{id}}",
+    "events": [
+      {
+        "name": "purchase",
+        "params": { "value": "{{amount}}", "currency": "USD" }
+      }
+    ]
+  }
+}
+```
+
+**Datadog**
+- Send events
+- Log data
+- Submit metrics
+- Create incidents
+
+```json
+{
+  "type": "datadog",
+  "action": "send_event",
+  "params": {
+    "title": "{{event_title}}",
+    "text": "{{event_description}}",
+    "priority": "normal",
+    "tags": ["{{tag1}}", "{{tag2}}"]
+  }
+}
+```
+
+---
+
+## Creating Custom Connectors
+
+Extend KAI with your own integrations.
+
+```typescript
+// 1. Define connector
+interface MyConnector extends BaseConnector {
+  id: "my_service";
+  actions: [
+    {
+      id: "do_something";
+      name: "Do Something";
+      params: { input: { type: "string"; required: true } };
+    }
+  ];
+}
+
+// 2. Implement execute method
+async execute(
+  action: string,
+  params: Record<string, any>,
+  env: Env
+): Promise<any> {
+  if (action === "do_something") {
+    return await this.doSomething(params, env);
+  }
+  throw new Error(`Unknown action: ${action}`);
+}
+
+// 3. Register with KAI
+connectors["my_service"] = new MyConnector();
+
+// 4. Use in workflows
+{
+  "type": "my_service",
+  "action": "do_something",
+  "params": { "input": "{{some_value}}" }
+}
+```
+
+## Connector Status
+
+| Connector | Status | Maintained | Support |
+| --- | --- | --- | --- |
+| HTTP | ✅ Stable | Official | Priority |
+| Slack | ✅ Stable | Official | Priority |
+| Email | ✅ Stable | Official | Priority |
+| PostgreSQL | ✅ Stable | Official | Priority |
+| AWS S3 | ✅ Stable | Official | Priority |
+| Stripe | ✅ Stable | Official | Priority |
+| Shopify | ✅ Stable | Community | Standard |
+| Google Sheets | ✅ Stable | Community | Standard |
+| Notion | ⚠️ Beta | Community | Best-effort |
+| Discord | ✅ Stable | Community | Standard |
+
+---
+
+## Connector Configuration
+
+Each connector requires configuration in `wrangler.toml`:
+
+```toml
+[env.production.secrets]
+# Database
+DATABASE_URL = "postgresql://..."
+
+# APIs
+SLACK_BOT_TOKEN = "xoxb-..."
+STRIPE_API_KEY = "sk_live_..."
+SHOPIFY_API_KEY = "..."
+
+# Cloud Storage
+AWS_ACCESS_KEY_ID = "..."
+AWS_SECRET_ACCESS_KEY = "..."
+```
+
+---
+
+## Performance & Limits
+
+| Aspect | Limit | Notes |
+| --- | --- | --- |
+| Request timeout | 30 seconds | Per connector call |
+| Concurrent connectors | 10 | Per workflow |
+| Retry attempts | 3 | Exponential backoff |
+| Rate limiting | 100 req/min | Per API key |
+
+---
+
+## Contributing Connectors
+
+To contribute a new connector:
+
+1. Implement `BaseConnector` interface
+2. Add unit tests
+3. Document actions and parameters
+4. Submit PR with examples
+
+See [Contributing Guide](/workers-ai/models/kai-contributing/) for details.
+
+---
+
+Ready to connect KAI to your systems? Start with [HTTP Connector](/workers-ai/models/kai-workflow-engine/#http--rest-apis) for any API, or choose from the marketplace above.
