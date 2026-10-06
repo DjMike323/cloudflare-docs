@@ -1,0 +1,61 @@
+---
+title: HERMES + KAI Hybrid Implementation Guide
+description: Production code for combining HERMES Trinity with KAI workflows
+date: 2026-10-06
+products:
+  - workers-ai
+---
+
+Added **HERMES + KAI Hybrid System - Implementation Guide** with production-ready code for integrating both systems.
+
+## What's Included
+
+### Complete TypeScript Implementation
+- **Hybrid Router**: Decides between HERMES and KAI based on confidence
+- **HERMES Execution**: Adaptive, learning-based processing
+- **KAI Execution**: Deterministic workflow orchestration
+- **Unified Memory**: Both systems share Unidad Dos (Layer 1-3 memory)
+
+### Integration Patterns
+- **Pattern 1**: Adaptive workflow selection (HERMES → KAI fallback)
+- **Pattern 2**: Validation via dual execution (compare both systems)
+- **Pattern 3**: Progressive learning (auto-create KAI workflows from patterns)
+
+### Production Features
+- Quality gates and result validation
+- Hybrid execution metrics and monitoring
+- Database schema for tracking both systems
+- Deployment configuration (env vars, D1 setup)
+- Unit and integration tests
+- Ensemble multi-model routing (advanced)
+
+## How It Works
+
+1. **User sends request** → Router decides
+2. **If high confidence**: HERMES learns and improves
+3. **If low confidence**: Delegate to proven KAI workflow
+4. **Both systems share memory**: Learn from each other
+5. **Next time**: Faster, cheaper, more accurate
+
+## Key Benefits
+
+- ✅ **Autonomy of HERMES** + **Reliability of KAI**
+- ✅ **Progressive optimization** as patterns emerge
+- ✅ **Automatic workflow creation** from learned patterns
+- ✅ **Quality validation** across both systems
+- ✅ **Production metrics** for monitoring performance
+
+## Starting the Hybrid System
+
+```typescript
+const response = await hybridOrchestrate(
+  {
+    userId: "user_123",
+    request: "Write a blog post about AI",
+    requestType: "auto", // Auto-route based on confidence
+  },
+  env
+);
+```
+
+This implementation bridges the gap between autonomous learning (HERMES) and proven automation (KAI).
