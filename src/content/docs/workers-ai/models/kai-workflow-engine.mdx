@@ -1,0 +1,702 @@
+---
+title: KAI Workflow Engine - Core Implementation
+description: Complete workflow automation engine with connector framework, state management, and HERMES integration
+pcx_content_type: reference
+difficulty: Advanced
+sidebar:
+  order: 18
+products:
+  - workers-ai
+reviewed: 2026-10-06
+---
+
+import { Tabs, TabItem, Details, Aside } from "~/components"
+
+Production-ready KAI workflow automation engine integrated with HERMES Trinity.
+
+## Architecture Overview
+
+KAI is a deterministic workflow execution engine that handles complex multi-step automations. It complements HERMES Trinity by handling structured, repetitive workflows while HERMES handles adaptive routing.
+
+```
+User Request
+    ↓
+HERMES Conductor
+    ├─ High Confidence (> 0.8) → HERMES Agents
+    └─ Low Confidence (< 0.65) → KAI Workflows
+    ↓
+KAI Workflow Engine
+├─ Trigger System
+├─ Executor
+├─ State Manager
+└─ Connector Layer
+```
+
+## Core Components
+
+### 1. Trigger System
+
+Listen for events that start workflows.
+
+```typescript
+interface Trigger {
+  id: string;
+  workflowId: string;
+  type: "webhook" | "schedule" | "event" | "manual";
+  config: Record<string, any>;
+  enabled: boolean;
+}
+
+// Webhook trigger
+async function createWebhookTrigger(
+  workflowId: string,
+  path: string,
+  env: Env
+): Promise<Trigger> {
+  const trigger: Trigger = {
+    id: `trigger_${Date.now()}`,
+    workflowId,
+    type: "webhook",
+    config: {
+      path,
+      method: "POST",
+      allowedHeaders: ["X-API-Key", "Content-Type"],
+    },
+    enabled: true,
+  };
+
+  await env.DB.prepare(
+    `INSERT INTO triggers (id, workflow_id, type, config, enabled)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+    .bind(trigger.id, workflowId, trigger.type, JSON.stringify(trigger.config), true)
+    .run();
+
+  return trigger;
+}
+
+// Schedule trigger (cron)
+async function createScheduleTrigger(
+  workflowId: string,
+  schedule: string, // "0 9 * * *" = daily at 9am
+  env: Env
+): Promise<Trigger> {
+  const trigger: Trigger = {
+    id: `trigger_${Date.now()}`,
+    workflowId,
+    type: "schedule",
+    config: { schedule },
+    enabled: true,
+  };
+
+  await env.DB.prepare(
+    `INSERT INTO triggers (id, workflow_id, type, config, enabled)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+    .bind(trigger.id, workflowId, trigger.type, JSON.stringify(trigger.config), true)
+    .run();
+
+  return trigger;
+}
+
+// Handle webhook trigger
+export async function handleWorkflowTrigger(
+  path: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  // Find workflow by trigger path
+  const trigger = await env.DB.prepare(
+    `SELECT workflow_id FROM triggers 
+     WHERE type = 'webhook' AND config LIKE ?`
+  )
+    .bind(`%"path":"${path}"%`)
+    .first();
+
+  if (!trigger) {
+    return new Response("Trigger not found", { status: 404 });
+  }
+
+  const payload = await request.json();
+
+  // Execute workflow
+  const execution = await executeWorkflow(trigger.workflow_id, payload, env);
+
+  return new Response(JSON.stringify({ executionId: execution.id }), {
+    status: 202,
+  });
+}
+```
+
+### 2. Workflow Executor
+
+Execute workflow steps in sequence or parallel.
+
+```typescript
+interface WorkflowStep {
+  id: string;
+  type: "connector" | "transform" | "condition" | "loop" | "parallel";
+  connector?: {
+    type: string;
+    action: string;
+    params: Record<string, any>;
+  };
+  transform?: {
+    language: "javascript";
+    code: string;
+  };
+  condition?: string;
+  retryPolicy?: {
+    maxRetries: number;
+    backoffMs: number;
+  };
+  timeoutMs?: number;
+  nextStep?: string;
+  errorHandler?: string;
+}
+
+interface WorkflowDefinition {
+  id: string;
+  name: string;
+  version: number;
+  steps: WorkflowStep[];
+  triggerSchema?: Record<string, any>;
+}
+
+async function executeWorkflow(
+  workflowId: string,
+  input: Record<string, any>,
+  env: Env
+): Promise<{ id: string; status: string; output: any }> {
+  // Load workflow definition
+  const workflow = await env.DB.prepare(
+    `SELECT definition FROM workflows WHERE id = ?`
+  )
+    .bind(workflowId)
+    .first();
+
+  if (!workflow) {
+    throw new Error(`Workflow ${workflowId} not found`);
+  }
+
+  const definition: WorkflowDefinition = JSON.parse(workflow.definition);
+
+  // Create execution record
+  const executionId = `exec_${Date.now()}`;
+  await env.DB.prepare(
+    `INSERT INTO workflow_executions (id, workflow_id, status, started_at, context_json)
+     VALUES (?, ?, ?, datetime('now'), ?)`
+  )
+    .bind(executionId, workflowId, "running", JSON.stringify({ input, steps: {} }))
+    .run();
+
+  try {
+    // Execute steps
+    let context = { ...input };
+    const stepResults: Record<string, any> = {};
+
+    for (const step of definition.steps) {
+      const stepResult = await executeStep(step, context, env);
+      stepResults[step.id] = stepResult;
+      context = { ...context, [step.id]: stepResult };
+    }
+
+    // Mark execution as success
+    await env.DB.prepare(
+      `UPDATE workflow_executions SET status = ?, ended_at = datetime('now') WHERE id = ?`
+    )
+      .bind("success", executionId)
+      .run();
+
+    return {
+      id: executionId,
+      status: "success",
+      output: stepResults,
+    };
+  } catch (error) {
+    // Mark execution as failed
+    await env.DB.prepare(
+      `UPDATE workflow_executions SET status = ?, error_message = ?, ended_at = datetime('now') WHERE id = ?`
+    )
+      .bind("failed", String(error), executionId)
+      .run();
+
+    throw error;
+  }
+}
+
+async function executeStep(
+  step: WorkflowStep,
+  context: Record<string, any>,
+  env: Env
+): Promise<any> {
+  if (step.type === "connector") {
+    return await executeConnector(step.connector!, context, env);
+  } else if (step.type === "transform") {
+    return executeTransform(step.transform!, context);
+  } else if (step.type === "condition") {
+    return evaluateCondition(step.condition!, context);
+  } else if (step.type === "parallel") {
+    return await executeParallel(step, context, env);
+  }
+
+  throw new Error(`Unknown step type: ${step.type}`);
+}
+
+function executeTransform(
+  transform: { language: string; code: string },
+  context: Record<string, any>
+): any {
+  // Create function from code string
+  const fn = new Function("context", `return (${transform.code})(context)`);
+  return fn(context);
+}
+
+function evaluateCondition(
+  condition: string,
+  context: Record<string, any>
+): boolean {
+  // Evaluate condition like "context.status === 'active' && context.count > 10"
+  const fn = new Function("context", `return ${condition}`);
+  return fn(context);
+}
+
+async function executeParallel(
+  step: WorkflowStep,
+  context: Record<string, any>,
+  env: Env
+): Promise<Record<string, any>> {
+  // Get parallel step IDs from step config
+  const parallelSteps = (step.connector?.params?.steps || []) as string[];
+
+  // Execute all in parallel
+  const results = await Promise.all(
+    parallelSteps.map((stepId) =>
+      env.DB.prepare(`SELECT * FROM workflows WHERE id = ?`)
+        .bind(stepId)
+        .first()
+    )
+  );
+
+  return Object.fromEntries(parallelSteps.map((id, i) => [id, results[i]]));
+}
+```
+
+### 3. Connector Framework
+
+Standardized interface for integrations.
+
+```typescript
+interface ConnectorAction {
+  id: string;
+  name: string;
+  description: string;
+  params: Record<string, ParamDef>;
+}
+
+interface ParamDef {
+  type: "string" | "number" | "boolean" | "array" | "object";
+  required: boolean;
+  description?: string;
+}
+
+// Base connector class
+abstract class BaseConnector {
+  abstract readonly id: string;
+  abstract readonly actions: ConnectorAction[];
+
+  abstract execute(
+    action: string,
+    params: Record<string, any>,
+    env: Env
+  ): Promise<any>;
+}
+
+// HTTP Connector
+class HttpConnector extends BaseConnector {
+  readonly id = "http";
+
+  readonly actions: ConnectorAction[] = [
+    {
+      id: "get",
+      name: "GET Request",
+      description: "Make HTTP GET request",
+      params: {
+        url: { type: "string", required: true },
+        headers: { type: "object", required: false },
+        timeout: { type: "number", required: false },
+      },
+    },
+    {
+      id: "post",
+      name: "POST Request",
+      description: "Make HTTP POST request",
+      params: {
+        url: { type: "string", required: true },
+        body: { type: "object", required: true },
+        headers: { type: "object", required: false },
+      },
+    },
+  ];
+
+  async execute(
+    action: string,
+    params: Record<string, any>,
+    env: Env
+  ): Promise<any> {
+    if (action === "get") {
+      return await this.get(params);
+    } else if (action === "post") {
+      return await this.post(params);
+    }
+    throw new Error(`Unknown action: ${action}`);
+  }
+
+  private async get(params: Record<string, any>): Promise<any> {
+    const response = await fetch(params.url, {
+      method: "GET",
+      headers: params.headers || {},
+      timeout: params.timeout || 30000,
+    });
+    return await response.json();
+  }
+
+  private async post(params: Record<string, any>): Promise<any> {
+    const response = await fetch(params.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(params.headers || {}),
+      },
+      body: JSON.stringify(params.body),
+      timeout: 30000,
+    });
+    return await response.json();
+  }
+}
+
+// Slack Connector
+class SlackConnector extends BaseConnector {
+  readonly id = "slack";
+
+  readonly actions: ConnectorAction[] = [
+    {
+      id: "send_message",
+      name: "Send Message",
+      description: "Send message to Slack channel",
+      params: {
+        channel: { type: "string", required: true },
+        text: { type: "string", required: true },
+        blocks: { type: "array", required: false },
+      },
+    },
+  ];
+
+  async execute(
+    action: string,
+    params: Record<string, any>,
+    env: Env
+  ): Promise<any> {
+    if (action === "send_message") {
+      return await this.sendMessage(params, env);
+    }
+    throw new Error(`Unknown action: ${action}`);
+  }
+
+  private async sendMessage(
+    params: Record<string, any>,
+    env: Env
+  ): Promise<any> {
+    const response = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
+      },
+      body: JSON.stringify({
+        channel: params.channel,
+        text: params.text,
+        blocks: params.blocks,
+      }),
+    });
+    return await response.json();
+  }
+}
+
+// Connector registry
+const connectors: Record<string, BaseConnector> = {
+  http: new HttpConnector(),
+  slack: new SlackConnector(),
+  // Add more...
+};
+
+async function executeConnector(
+  config: { type: string; action: string; params: Record<string, any> },
+  context: Record<string, any>,
+  env: Env
+): Promise<any> {
+  const connector = connectors[config.type];
+  if (!connector) {
+    throw new Error(`Connector not found: ${config.type}`);
+  }
+
+  // Replace template variables in params
+  const params = replaceTemplates(config.params, context);
+
+  return await connector.execute(config.action, params, env);
+}
+
+function replaceTemplates(
+  obj: any,
+  context: Record<string, any>
+): Record<string, any> {
+  if (typeof obj === "string") {
+    // Replace {{variable}} with context value
+    return obj.replace(/{{(\w+)}}/g, (_, key) => context[key] || "");
+  } else if (Array.isArray(obj)) {
+    return obj.map((item) => replaceTemplates(item, context));
+  } else if (typeof obj === "object") {
+    return Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [k, replaceTemplates(v, context)])
+    );
+  }
+  return obj;
+}
+```
+
+### 4. State Manager
+
+Track workflow execution state across requests.
+
+```typescript
+interface ExecutionState {
+  id: string;
+  workflowId: string;
+  status: "pending" | "running" | "success" | "failed" | "paused";
+  context: Record<string, any>;
+  stepResults: Record<string, any>;
+  startedAt: number;
+  updatedAt: number;
+  error?: string;
+}
+
+async function getExecutionState(
+  executionId: string,
+  env: Env
+): Promise<ExecutionState> {
+  // Try KV cache first (fast)
+  const cached = await env.KV.get(`execution:${executionId}`, "json");
+  if (cached) {
+    return cached as ExecutionState;
+  }
+
+  // Fall back to D1 (persistent)
+  const record = await env.DB.prepare(
+    `SELECT * FROM workflow_executions WHERE id = ?`
+  )
+    .bind(executionId)
+    .first();
+
+  if (!record) {
+    throw new Error(`Execution not found: ${executionId}`);
+  }
+
+  const state: ExecutionState = {
+    id: record.id,
+    workflowId: record.workflow_id,
+    status: record.status,
+    context: JSON.parse(record.context_json),
+    stepResults: {},
+    startedAt: new Date(record.started_at).getTime(),
+    updatedAt: new Date(record.updated_at || record.started_at).getTime(),
+    error: record.error_message,
+  };
+
+  // Cache for 24 hours
+  await env.KV.put(`execution:${executionId}`, JSON.stringify(state), {
+    expirationTtl: 86400,
+  });
+
+  return state;
+}
+
+async function updateExecutionState(
+  state: ExecutionState,
+  env: Env
+): Promise<void> {
+  // Update D1
+  await env.DB.prepare(
+    `UPDATE workflow_executions SET context_json = ?, updated_at = datetime('now') WHERE id = ?`
+  )
+    .bind(JSON.stringify(state.context), state.id)
+    .run();
+
+  // Update KV cache
+  await env.KV.put(`execution:${state.id}`, JSON.stringify(state), {
+    expirationTtl: 86400,
+  });
+}
+```
+
+## HERMES + KAI Integration
+
+### Hybrid Routing
+
+```typescript
+async function hybridRoute(
+  request: string,
+  env: Env
+): Promise<{ system: "hermes" | "kai"; result: any }> {
+  // 1. Get HERMES routing decision
+  const routing = await conductorAgent(request, env);
+
+  // 2. Route based on confidence
+  if (routing.confidence > 0.8) {
+    // High confidence → use HERMES
+    const result = await executeHermesAgent(routing, env);
+    return { system: "hermes", result };
+  } else if (routing.confidence < 0.65) {
+    // Low confidence → use KAI workflow
+    const workflowId = await suggestWorkflow(routing.task, env);
+    const result = await executeWorkflow(workflowId, { input: request }, env);
+    return { system: "kai", result };
+  } else {
+    // Medium confidence → try HERMES first, fallback to KAI
+    try {
+      const result = await executeHermesAgent(routing, env);
+      return { system: "hermes", result };
+    } catch (error) {
+      const workflowId = await suggestWorkflow(routing.task, env);
+      const result = await executeWorkflow(workflowId, { input: request }, env);
+      return { system: "kai", result };
+    }
+  }
+}
+
+async function suggestWorkflow(task: string, env: Env): Promise<string> {
+  // Find best matching workflow for this task
+  const workflow = await env.DB.prepare(
+    `SELECT id FROM workflows 
+     WHERE status = 'published' 
+     ORDER BY success_rate DESC LIMIT 1`
+  ).first();
+
+  return workflow?.id || "default_workflow";
+}
+```
+
+### Cross-System Learning
+
+```typescript
+async function recordCrossSystemExecution(
+  hermesEpisodeId: string,
+  kaiExecutionId: string,
+  success: boolean,
+  env: Env
+): Promise<void> {
+  // Store correlation for analysis
+  await env.DB.prepare(
+    `INSERT INTO execution_correlations 
+     (id, hermes_episode_id, kai_workflow_execution_id, outcome_rating, executed_at)
+     VALUES (?, ?, ?, ?, datetime('now'))`
+  )
+    .bind(
+      `corr_${Date.now()}`,
+      hermesEpisodeId,
+      kaiExecutionId,
+      success ? 1 : 0
+    )
+    .run();
+
+  // Update unified patterns
+  if (success) {
+    await env.DB.prepare(
+      `UPDATE unified_patterns SET use_count = use_count + 1 WHERE source = 'kai_execution'`
+    ).run();
+  }
+}
+```
+
+## Workflow Templates
+
+### Template 1: Customer Support Workflow
+
+```json
+{
+  "id": "support_workflow_v1",
+  "name": "Customer Support",
+  "steps": [
+    {
+      "id": "parse_ticket",
+      "type": "transform",
+      "transform": {
+        "language": "javascript",
+        "code": "c => ({ priority: c.urgency, category: c.category, message: c.text })"
+      }
+    },
+    {
+      "id": "check_urgency",
+      "type": "condition",
+      "condition": "context.parse_ticket.priority === 'urgent'"
+    },
+    {
+      "id": "escalate_slack",
+      "type": "connector",
+      "connector": {
+        "type": "slack",
+        "action": "send_message",
+        "params": {
+          "channel": "#support-urgent",
+          "text": "🚨 Urgent: {{parse_ticket.message}}"
+        }
+      }
+    },
+    {
+      "id": "create_ticket",
+      "type": "connector",
+      "connector": {
+        "type": "http",
+        "action": "post",
+        "params": {
+          "url": "https://support.yourdomain.com/api/tickets",
+          "body": {
+            "priority": "{{parse_ticket.priority}}",
+            "category": "{{parse_ticket.category}}",
+            "message": "{{parse_ticket.message}}"
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+## Performance Optimization
+
+**Caching strategies:**
+- Cache workflow definitions in KV (TTL: 24 hours)
+- Cache execution state during workflow run
+- Parallel steps execute concurrently
+
+**Timeout handling:**
+- Per-step timeout (30 seconds default)
+- Overall workflow timeout (5 minutes)
+- Graceful degradation on timeout
+
+## Monitoring & Debugging
+
+```bash
+# Check workflow execution status
+wrangler d1 execute hermes-memory --remote \
+  "SELECT status, COUNT(*) as count FROM workflow_executions 
+   WHERE executed_at > datetime('now', '-1 hour')
+   GROUP BY status"
+
+# Get step-by-step execution logs
+wrangler d1 execute hermes-memory --remote \
+  "SELECT step_id, status, duration_ms FROM step_executions 
+   WHERE execution_id = 'exec_12345'
+   ORDER BY started_at"
+```
+
+See the [KAI Connector Marketplace](/workers-ai/models/kai-connector-marketplace/) for pre-built integrations and the [HERMES + KAI Integration](/workers-ai/models/hermes-kai-integration-guide/) guide for complete integration patterns.
