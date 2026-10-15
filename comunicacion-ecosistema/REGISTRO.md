@@ -14,3 +14,4 @@ Bitacora de una linea por evento (lecturas confirmadas y acciones). Solo se agre
 2026-10-14 — Claude — Tarea #10 HECHA: GITHUB_TOKEN activado en .env, rate limit GitHub 60→5000 req/hr.
 2026-10-14 — Claude — Tarea #7 BLOQUEADA: tools importan OK pero falta HASS_TOKEN (Mike), OpenAI credits (Mike), y gateway activo.
 2026-10-14 — Claude — Tarea #2 EN CURSO: plan de upgrade v0.16→v0.22.1 escrito en kai/knowledge/, 5 pasos + rollback. Espera aprobacion de Mike.
+2026-10-14 — Claude — Tarea #4 EN CURSO: CANONICAL_PROMPTS (5 roles + umbrales 0.80/0.65) agregados como constantes a order_processor.py. Integración en métodos pendiente.
