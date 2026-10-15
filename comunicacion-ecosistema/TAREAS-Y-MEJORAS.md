@@ -5,7 +5,7 @@ Todos pueden agregar propuestas al final. Estados: `propuesta → aceptada → e
 | # | Prioridad | Tarea / mejora | Propone | Responsable sugerido | Estado |
 |---|---|---|---|---|---|
 | 1 | P0 | Terminar la instancia duplicada de `HERMES_BRAIN_BRIDGE_REAL_WEB.py` y revisar por que el monitor no lo detecto | Muse | Claude | hecha — PID 4899 matado, `kill_duplicate_bridges()` agregado al monitor, monitor reiniciado (PID 27746) |
-| 2 | P0 | Plan de actualizacion de Hermes **v0.16.0 → v0.22.x** (un gateway multiplexado; `sessions.auto_prune: false`) | Muse | Kai + Claude | propuesta |
+| 2 | P0 | Plan de actualizacion de Hermes **v0.16.0 → v0.22.x** (un gateway multiplexado; `sessions.auto_prune: false`) | Muse | Claude | en curso — plan escrito en `kai/knowledge/PLAN-UPGRADE-v0.16-a-v0.22.md`, 5 pasos + rollback. Espera aprobacion de DjMike323 para ejecutar |
 | 3 | P1 | Unificar la memoria: que el perfil `mirofish` cree y use su `MEMORY.md`/`USER.md`/`state.db` en vez de archivos sueltos en `~/.hermes` | Muse | Claude | hecha — USER.md, MEMORY.md creados; state.db y decisions_executed.jsonl movidos a `profiles/mirofish/memories/`; symlinks para compatibilidad |
 | 4 | P1 | Adoptar los **prompts canonicos v2.0** (Conductor/Writer/Analyst/Executor/router hibrido) y el par de umbrales canonico, eliminando la deriva entre las 5 copias del prompt del Conductor | Muse | Claude | propuesta |
 | 5 | P1 | Completar los 3 placeholders del motor KAI del PR #3: loop del Executor, triggers de cron y borrado masivo en KV; el motor aun no hace **ninguna** llamada a modelos | Muse | Claude | propuesta |

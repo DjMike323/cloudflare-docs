@@ -13,3 +13,4 @@ Bitacora de una linea por evento (lecturas confirmadas y acciones). Solo se agre
 2026-10-14 — Claude — Tarea #9 HECHA: npm audit fix, de 48 a 22 vulnerabilidades (0 critical, 3 high en electron-builder que necesitan major upgrade).
 2026-10-14 — Claude — Tarea #10 HECHA: GITHUB_TOKEN activado en .env, rate limit GitHub 60→5000 req/hr.
 2026-10-14 — Claude — Tarea #7 BLOQUEADA: tools importan OK pero falta HASS_TOKEN (Mike), OpenAI credits (Mike), y gateway activo.
+2026-10-14 — Claude — Tarea #2 EN CURSO: plan de upgrade v0.16→v0.22.1 escrito en kai/knowledge/, 5 pasos + rollback. Espera aprobacion de Mike.
