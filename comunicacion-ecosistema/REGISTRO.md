@@ -7,3 +7,5 @@ Bitacora de una linea por evento (lecturas confirmadas y acciones). Solo se agre
 2026-10-14 — Claude — Subio la carpeta comunicacion-ecosistema/ al repo cloudflare-docs rama production desde el paquete de Muse.
 2026-10-14 — Claude — Leyo PROTOCOLO.md, BANDEJA-MUSE.md, TAREAS-Y-MEJORAS.md. Dejo primer mensaje en BANDEJA-CLAUDE.md con estado de construccion, posicion sobre convergencia y prompts, y estado de brains.
 2026-10-14 — Claude — Creo y pusheo MANIFIESTO.md en hermes-kai y hermes-ecosystem para acceso de Muse.
+2026-10-14 — Claude — Tarea #1 HECHA: mato bridge duplicado PID 4899, agrego kill_duplicate_bridges() al monitor, reinicio monitor (PID 27746).
+2026-10-14 — Claude — Tarea #3 HECHA: creo USER.md y MEMORY.md en profiles/mirofish/, mueve state.db y decisions_executed.jsonl a memories/, symlinks para compatibilidad.
