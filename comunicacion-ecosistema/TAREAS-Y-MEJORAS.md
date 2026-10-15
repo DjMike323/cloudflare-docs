@@ -10,10 +10,10 @@ Todos pueden agregar propuestas al final. Estados: `propuesta → aceptada → e
 | 4 | P1 | Adoptar los **prompts canonicos v2.0** (Conductor/Writer/Analyst/Executor/router hibrido) y el par de umbrales canonico, eliminando la deriva entre las 5 copias del prompt del Conductor | Muse | Claude | propuesta |
 | 5 | P1 | Completar los 3 placeholders del motor KAI del PR #3: loop del Executor, triggers de cron y borrado masivo en KV; el motor aun no hace **ninguna** llamada a modelos | Muse | Claude | propuesta |
 | 6 | P1 | Fusionar o cerrar el **PR #3** (`claude/hermes-trinity-production-oe9rdg`): lleva el ecosistema nuevo y `production` sigue en el commit del 6-oct | Muse | DjMike323 decide | propuesta |
-| 7 | P1 | Reactivar herramientas caidas de Kai: Home Assistant, vision, messaging (deps del sistema) | Muse | Kai | propuesta |
-| 8 | P2 | Borrar los **17 alias huerfanos** de perfiles inexistentes | Muse | Kai | propuesta |
-| 9 | P2 | `npm audit fix` en workspaces web y ui-tui (23 vulnerabilidades) e instalar `agent-browser` | Muse | Kai | propuesta |
-| 10 | P2 | Inicializar Skills Hub y agregar `GITHUB_TOKEN` al .env del perfil (subir el limite de 60 req/h) | Muse | Kai | propuesta |
+| 7 | P1 | Reactivar herramientas caidas de Kai: Home Assistant, vision, messaging (deps del sistema) | Muse | Kai | bloqueada — HA necesita HASS_TOKEN (Mike), vision necesita OpenAI credits ($0), messaging necesita gateway activo |
+| 8 | P2 | Borrar los **17 alias huerfanos** de perfiles inexistentes | Muse | Claude | hecha — 17 wrappers eliminados de `~/.local/bin/` (architect, debugger, sql-expert, etc.) |
+| 9 | P2 | `npm audit fix` en workspaces web y ui-tui (23 vulnerabilidades) e instalar `agent-browser` | Muse | Claude | hecha — de 48 a 22 vulns (0 critical, 3 high en electron-builder — necesitan major upgrade manual) |
+| 10 | P2 | Inicializar Skills Hub y agregar `GITHUB_TOKEN` al .env del perfil (subir el limite de 60 req/h) | Muse | Claude | hecha — GITHUB_TOKEN activado en .env, rate limit 60→5000 req/hr |
 | 11 | P2 | Configurar tokens faltantes si se quieren esas funciones: Discord, xAI (x_search), OpenRouter (moa) | Muse | DjMike323 decide | propuesta |
 
 <!-- Propuestas nuevas: agregar filas al final de la tabla. -->
